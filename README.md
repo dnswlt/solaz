@@ -36,7 +36,55 @@ Example `~/.solaz.conf`:
 ```
 
 Required fields: `name`, `host`, `vpn`, `client_cert_file`, `client_key_file`.
-Optional: `client_key_pass`, `trust_store_dir`, `client_name`.
+Optional: `client_key_pass`, `trust_store_dir`, `client_name`,
+`insecure_skip_verify` (dev-only — disables broker certificate validation;
+prints a warning to stderr).
+
+## Populating the trust store
+
+`trust_store_dir` is a directory of CA certs in OpenSSL hashed-directory
+format (filenames are `<subject-hash>.0`, not arbitrary `*.pem`). The
+quickest way to seed it from a live broker is to pull its chain and rehash:
+
+```sh
+HOST=broker.example.com
+PORT=55443
+TRUST_DIR=/etc/solaz/ca       # = your profile's trust_store_dir
+
+mkdir -p "$TRUST_DIR"
+cd "$TRUST_DIR"
+
+# Split the broker's full chain into cert-1.pem (leaf), cert-2.pem (intermediate), ...
+openssl s_client -connect "$HOST:$PORT" -showcerts </dev/null 2>/dev/null \
+  | awk '/-----BEGIN CERTIFICATE-----/{n++; f="cert-"n".pem"}
+         n>0 {print > f}
+         /-----END CERTIFICATE-----/{close(f)}'
+
+# Drop the leaf — you trust *issuers*, not the broker's own cert
+rm -f cert-1.pem
+
+# Inspect what you kept
+for f in cert-*.pem; do
+  echo "== $f =="
+  openssl x509 -in "$f" -noout -subject -issuer
+done
+
+# Build the <hash>.0 symlinks Solace looks up by
+openssl rehash .
+```
+
+Verify with plain openssl before re-running `solaz`:
+
+```sh
+openssl s_client -connect "$HOST:$PORT" -CApath "$TRUST_DIR" </dev/null 2>&1 \
+  | grep 'Verify return code'
+# Want: "Verify return code: 0 (ok)"
+```
+
+If you still see `20 (unable to get local issuer certificate)`, the broker
+isn't sending its intermediate(s) in the handshake. Obtain the missing CA
+PEM out-of-band (broker admin, your org's PKI), drop it into `$TRUST_DIR`,
+and re-run `openssl rehash`.
 
 ## Usage
 

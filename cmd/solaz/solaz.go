@@ -25,14 +25,15 @@ type Config struct {
 
 // Profile holds the connection settings for a single Solace broker.
 type Profile struct {
-	Name           string `json:"name"`             // unique within the config
-	Host           string `json:"host"`             // e.g. "tcps://broker.example.com:55443"
-	VPN            string `json:"vpn"`              // message VPN name
-	ClientCertFile string `json:"client_cert_file"` // PEM-encoded client cert
-	ClientKeyFile  string `json:"client_key_file"`  // PEM-encoded private key
-	ClientKeyPass  string `json:"client_key_pass"`  // optional password for encrypted key
-	TrustStoreDir  string `json:"trust_store_dir"`  // dir with CA certs to trust
-	ClientName     string `json:"client_name"`      // optional client name
+	Name               string `json:"name"`                 // unique within the config
+	Host               string `json:"host"`                 // e.g. "tcps://broker.example.com:55443"
+	VPN                string `json:"vpn"`                  // message VPN name
+	ClientCertFile     string `json:"client_cert_file"`     // PEM-encoded client cert
+	ClientKeyFile      string `json:"client_key_file"`      // PEM-encoded private key
+	ClientKeyPass      string `json:"client_key_pass"`      // optional password for encrypted key
+	TrustStoreDir      string `json:"trust_store_dir"`      // dir with CA certs to trust
+	ClientName         string `json:"client_name"`          // optional client name
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
 }
 
 func defaultConfigPath() string {
@@ -115,6 +116,11 @@ func buildService(p *Profile) (solace.MessagingService, error) {
 	}
 	if p.ClientName != "" {
 		props[config.ClientPropertyName] = p.ClientName
+	}
+	if p.InsecureSkipVerify {
+		fmt.Fprintf(os.Stderr, "WARNING: profile %q has insecure_skip_verify=true; broker certificate will NOT be validated.\n", p.Name)
+		props[config.TransportLayerSecurityPropertyCertValidated] = false
+		props[config.TransportLayerSecurityPropertyCertValidateServername] = false
 	}
 
 	return messaging.NewMessagingServiceBuilder().
