@@ -10,6 +10,12 @@ import (
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+
+	_ "google.golang.org/genproto/googleapis/type/date"
+	_ "google.golang.org/genproto/googleapis/type/datetime"
+	_ "google.golang.org/genproto/googleapis/type/latlng"
+	_ "google.golang.org/genproto/googleapis/type/money"
+	_ "google.golang.org/genproto/googleapis/type/timeofday"
 )
 
 // ProtoRegistry holds compiled proto descriptors.
@@ -44,10 +50,12 @@ func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
 		return &ProtoRegistry{Files: &protoregistry.Files{}}, nil
 	}
 
+	baseResolver := protocompile.WithStandardImports(&protocompile.SourceResolver{
+		ImportPaths: paths,
+	})
+
 	compiler := protocompile.Compiler{
-		Resolver: &protocompile.SourceResolver{
-			ImportPaths: paths,
-		},
+		Resolver: &globalFallbackResolver{Fallback: baseResolver},
 	}
 
 	files, err := compiler.Compile(context.Background(), protoFiles...)
@@ -76,4 +84,20 @@ func (r *ProtoRegistry) FindMessage(name string) (protoreflect.MessageDescriptor
 		return nil, fmt.Errorf("%s is not a message", name)
 	}
 	return md, nil
+}
+
+type globalFallbackResolver struct {
+	Fallback protocompile.Resolver
+}
+
+func (r *globalFallbackResolver) FindFileByPath(path string) (protocompile.SearchResult, error) {
+	res, err := r.Fallback.FindFileByPath(path)
+	if err == nil {
+		return res, nil
+	}
+	fd, globalErr := protoregistry.GlobalFiles.FindFileByPath(path)
+	if globalErr == nil {
+		return protocompile.SearchResult{Desc: fd}, nil
+	}
+	return res, err
 }
