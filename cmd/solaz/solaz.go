@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,24 +74,83 @@ func loadConfig(path string) (*Config, error) {
 // selectProfile picks a profile by name, or falls back to the first
 // profile if no name is given.
 func selectProfile(c *Config, name, configPath string) (*Profile, error) {
-	var p *Profile
 	if name == "" {
-		p = &c.Profiles[0]
-	} else {
-		for i := range c.Profiles {
-			if c.Profiles[i].Name == name {
-				p = &c.Profiles[i]
-				break
-			}
-		}
-		if p == nil {
-			return nil, fmt.Errorf("profile %q not found in %s (available: %s)", name, configPath, profileNames(c))
+		return &c.Profiles[0], nil
+	}
+	for i := range c.Profiles {
+		if c.Profiles[i].Name == name {
+			return &c.Profiles[i], nil
 		}
 	}
+	return nil, fmt.Errorf("profile %q not found in %s (available: %s)", name, configPath, profileNames(c))
+}
+
+func validateProfile(p *Profile, configPath string) error {
 	if p.Host == "" || p.VPN == "" || p.ClientCertFile == "" || p.ClientKeyFile == "" {
-		return nil, fmt.Errorf("%s: profile %q: host, vpn, client_cert_file and client_key_file are required", configPath, p.Name)
+		return fmt.Errorf("%s: profile %q: host, vpn, client_cert_file and client_key_file are required", configPath, p.Name)
 	}
-	return p, nil
+	return nil
+}
+
+// expandProfile substitutes ${var} / $var placeholders in every string
+// field of p using vars. Unresolved placeholders cause an error listing
+// the missing names.
+func expandProfile(p *Profile, vars map[string]string) error {
+	var missing []string
+	seen := map[string]bool{}
+	mapper := func(key string) string {
+		if v, ok := vars[key]; ok {
+			return v
+		}
+		if !seen[key] {
+			seen[key] = true
+			missing = append(missing, key)
+		}
+		return ""
+	}
+	fields := []*string{
+		&p.Name, &p.Host, &p.VPN,
+		&p.ClientCertFile, &p.ClientKeyFile, &p.ClientKeyPass,
+		&p.ClientCertUserName, &p.TrustStoreDir, &p.ClientName,
+	}
+	for _, f := range fields {
+		*f = os.Expand(*f, mapper)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing template variables: %s (pass with --var KEY=VALUE)", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// varsFlag collects repeated --var KEY=VALUE flags into a map.
+type varsFlag struct{ m map[string]string }
+
+func (v *varsFlag) String() string {
+	if v == nil || len(v.m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(v.m))
+	for k := range v.m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + v.m[k]
+	}
+	return strings.Join(parts, ",")
+}
+
+func (v *varsFlag) Set(s string) error {
+	k, val, ok := strings.Cut(s, "=")
+	if !ok || k == "" {
+		return fmt.Errorf("invalid --var %q, want KEY=VALUE", s)
+	}
+	if v.m == nil {
+		v.m = map[string]string{}
+	}
+	v.m[k] = val
+	return nil
 }
 
 func profileNames(c *Config) string {
@@ -138,7 +198,9 @@ func main() {
 		profileFlag = flag.String("profile", "", "profile name to use (defaults to the first profile in the config)")
 		topicFlag   = flag.String("topic", "", "topic subscription pattern (required)")
 		timeoutFlag = flag.Duration("timeout", 30*time.Second, "max time to wait for a message")
+		vars        = &varsFlag{}
 	)
+	flag.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	flag.Parse()
 
 	if *topicFlag == "" {
@@ -155,6 +217,12 @@ func main() {
 	}
 	profile, err := selectProfile(cfg, *profileFlag, configPath)
 	if err != nil {
+		log.Fatalf("profile: %v", err)
+	}
+	if err := expandProfile(profile, vars.m); err != nil {
+		log.Fatalf("profile %q: %v", profile.Name, err)
+	}
+	if err := validateProfile(profile, configPath); err != nil {
 		log.Fatalf("profile: %v", err)
 	}
 

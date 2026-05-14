@@ -54,6 +54,43 @@ Optional fields:
 - `insecure_skip_verify` — dev-only. Disables broker certificate
   validation (chain *and* hostname). Prints a warning to stderr.
 
+## Templated profiles
+
+Any string field in a profile may contain `${VAR}` (or `$VAR`)
+placeholders. Provide values on the command line with `--var KEY=VALUE`
+(repeatable); unresolved placeholders fail fast with a list of missing
+names. This lets one profile cover many brokers/environments without
+duplicating entries:
+
+```json
+{
+  "profiles": [
+    {
+      "name": "openshift",
+      "host":             "tcps://${namespace}-broker.internal:55443",
+      "vpn":              "${vpn}",
+      "client_cert_file": "${creds}/${namespace}.crt",
+      "client_key_file":  "${creds}/${namespace}.key",
+      "trust_store_dir":  "${creds}/ca",
+      "client_name":      "solaz-cli",
+      "insecure_skip_verify": true
+    }
+  ]
+}
+```
+
+```sh
+solaz --topic 'foo/>' \
+      --var namespace=dev-payments-1 \
+      --var vpn=payments-dev \
+      --var creds=$HOME/solaz-creds
+```
+
+Expansion happens before validation, so a templated profile with no
+`--var`s supplied errors with `missing template variables: namespace, vpn, creds`
+rather than failing later at TLS time. Profiles with no placeholders are
+unaffected.
+
 ## Populating the trust store
 
 `trust_store_dir` is a directory of CA certs in OpenSSL hashed-directory
