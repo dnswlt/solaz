@@ -31,6 +31,7 @@ type Profile struct {
 	ClientCertFile     string `json:"client_cert_file"`     // PEM-encoded client cert
 	ClientKeyFile      string `json:"client_key_file"`      // PEM-encoded private key
 	ClientKeyPass      string `json:"client_key_pass"`      // optional password for encrypted key
+	ClientCertUserName string `json:"client_cert_username"` // optional username for client-certificate auth
 	TrustStoreDir      string `json:"trust_store_dir"`      // dir with CA certs to trust
 	ClientName         string `json:"client_name"`          // optional client name
 	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
@@ -102,16 +103,19 @@ func profileNames(c *Config) string {
 
 func buildService(p *Profile) (solace.MessagingService, error) {
 	props := config.ServicePropertyMap{
-		config.TransportLayerPropertyHost:                              p.Host,
-		config.ServicePropertyVPNName:                                  p.VPN,
-		config.AuthenticationPropertyScheme:                            config.AuthenticationSchemeClientCertificate,
-		config.AuthenticationPropertySchemeSSLClientCertFile:           p.ClientCertFile,
-		config.AuthenticationPropertySchemeSSLClientPrivateKeyFile:     p.ClientKeyFile,
+		config.TransportLayerPropertyHost:                          p.Host,
+		config.ServicePropertyVPNName:                              p.VPN,
+		config.AuthenticationPropertyScheme:                        config.AuthenticationSchemeClientCertificate,
+		config.AuthenticationPropertySchemeSSLClientCertFile:       p.ClientCertFile,
+		config.AuthenticationPropertySchemeSSLClientPrivateKeyFile: p.ClientKeyFile,
 	}
 	if p.ClientKeyPass != "" {
 		props[config.AuthenticationPropertySchemeClientCertPrivateKeyFilePassword] = p.ClientKeyPass
 	}
-	if p.TrustStoreDir != "" {
+	if p.ClientCertUserName != "" {
+		props[config.AuthenticationPropertySchemeClientCertUserName] = p.ClientCertUserName
+	}
+	if p.TrustStoreDir != "" && !p.InsecureSkipVerify {
 		props[config.TransportLayerSecurityPropertyTrustStorePath] = p.TrustStoreDir
 	}
 	if p.ClientName != "" {

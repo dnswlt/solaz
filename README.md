@@ -26,19 +26,33 @@ Example `~/.solaz.conf`:
       "name": "prod",
       "host": "tcps://broker.prod.example.com:55443",
       "vpn": "prod-vpn",
-      "client_cert_file": "/etc/solaz/prod.crt",
-      "client_key_file":  "/etc/solaz/prod.key",
-      "client_key_pass":  "hunter2",
-      "trust_store_dir":  "/etc/solaz/ca/"
+      "client_cert_file":     "/etc/solaz/prod.crt",
+      "client_key_file":      "/etc/solaz/prod.key",
+      "client_key_pass":      "hunter2",
+      "client_cert_username": "svc-solaz-prod",
+      "trust_store_dir":      "/etc/solaz/ca/"
     }
   ]
 }
 ```
 
 Required fields: `name`, `host`, `vpn`, `client_cert_file`, `client_key_file`.
-Optional: `client_key_pass`, `trust_store_dir`, `client_name`,
-`insecure_skip_verify` (dev-only — disables broker certificate validation;
-prints a warning to stderr).
+
+Optional fields:
+
+- `client_key_pass` — password for an encrypted private key.
+- `client_cert_username` — Solace VPN username to authenticate as. Omit to
+  let the broker derive it from the cert (typically the CN, per its
+  certificate-matching rule). Set this when the broker requires an
+  explicit username that doesn't match what it would extract.
+- `trust_store_dir` — directory of CA certs in OpenSSL hashed-directory
+  format, used to validate the broker's server certificate. See
+  [Populating the trust store](#populating-the-trust-store). Ignored when
+  `insecure_skip_verify` is true.
+- `client_name` — display name for the connection in the broker's
+  connected-clients list. Cosmetic; not used for authentication.
+- `insecure_skip_verify` — dev-only. Disables broker certificate
+  validation (chain *and* hostname). Prints a warning to stderr.
 
 ## Populating the trust store
 
