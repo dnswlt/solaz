@@ -10,14 +10,14 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/dynamicpb"
 
-	solacemsg "solace.dev/go/messaging/pkg/solace"
+	"solace.dev/go/messaging/pkg/solace"
 	"solace.dev/go/messaging/pkg/solace/message"
 	"solace.dev/go/messaging/pkg/solace/resource"
 )
 
 // ReceiveOptions bundles the parameters for receiving a message.
 type ReceiveOptions struct {
-	Topic       string
+	Topics      []string
 	Timeout     time.Duration
 	Registry    *ProtoRegistry
 	MessageType string
@@ -25,7 +25,7 @@ type ReceiveOptions struct {
 
 // Run connects to the messaging service, subscribes to the given topic,
 // waits for a single message within the timeout, and prints its details.
-func Run(svc solacemsg.MessagingService, opts ReceiveOptions) error {
+func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 	if err := svc.Connect(); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
@@ -35,9 +35,13 @@ func Run(svc solacemsg.MessagingService, opts ReceiveOptions) error {
 		}
 	}()
 
-	sub := resource.TopicSubscriptionOf(opts.Topic)
+	subs := make([]resource.Subscription, len(opts.Topics))
+	for i, t := range opts.Topics {
+		subs[i] = resource.TopicSubscriptionOf(t)
+	}
+
 	receiver, err := svc.CreateDirectMessageReceiverBuilder().
-		WithSubscriptions(sub).
+		WithSubscriptions(subs...).
 		Build()
 	if err != nil {
 		return fmt.Errorf("build receiver: %w", err)

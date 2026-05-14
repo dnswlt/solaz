@@ -12,6 +12,21 @@ import (
 	"github.com/dnswlt/hackz/solaz/internal/solace"
 )
 
+// topicsFlag collects repeated --topic flags into a slice.
+type topicsFlag []string
+
+func (t *topicsFlag) String() string {
+	if t == nil {
+		return ""
+	}
+	return strings.Join(*t, ",")
+}
+
+func (t *topicsFlag) Set(s string) error {
+	*t = append(*t, s)
+	return nil
+}
+
 // varsFlag collects repeated --var KEY=VALUE flags into a map.
 type varsFlag struct{ m map[string]string }
 
@@ -47,15 +62,16 @@ func main() {
 	var (
 		configFlag  = flag.String("config", "", "path to config file (default: ~/.solaz.conf)")
 		profileFlag = flag.String("profile", "", "profile name to use (defaults to the first profile in the config)")
-		topicFlag   = flag.String("topic", "", "topic subscription pattern (required)")
 		timeoutFlag = flag.Duration("timeout", 30*time.Second, "max time to wait for a message")
 		typeFlag    = flag.String("type", "", "protobuf message type to use for decoding")
 		vars        = &varsFlag{}
+		topics      topicsFlag
 	)
 	flag.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
+	flag.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
 	flag.Parse()
 
-	if *topicFlag == "" {
+	if len(topics) == 0 {
 		log.Fatal("--topic is required")
 	}
 
@@ -84,7 +100,7 @@ func main() {
 	}
 
 	fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for one message...\n",
-		profile.Name, *topicFlag, profile.Host, profile.VPN, *timeoutFlag)
+		profile.Name, strings.Join(topics, ","), profile.Host, profile.VPN, *timeoutFlag)
 
 	var registry *solace.ProtoRegistry
 	if len(profile.ProtoPaths) > 0 {
@@ -95,7 +111,7 @@ func main() {
 	}
 
 	opts := solace.ReceiveOptions{
-		Topic:       *topicFlag,
+		Topics:      topics,
 		Timeout:     *timeoutFlag,
 		Registry:    registry,
 		MessageType: *typeFlag,
