@@ -59,23 +59,57 @@ func (v *varsFlag) Set(s string) error {
 }
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: %s <command> [flags]\n\nCommands:\n  headers   Print message headers and payload size\n  print     Print message payloads as single-line JSON\n", os.Args[0])
+		os.Exit(1)
+	}
+
+	cmd := os.Args[1]
+	if cmd == "-h" || cmd == "--help" {
+		fmt.Fprintf(os.Stderr, "Usage: %s <command> [flags]\n\nCommands:\n  headers   Print message headers and payload size\n  print     Print message payloads as single-line JSON\n", os.Args[0])
+		os.Exit(0)
+	}
+
 	var (
-		configFlag  = flag.String("config", "", "path to config file (default: ~/.solaz.conf)")
-		profileFlag = flag.String("profile", "", "profile name to use (defaults to the first profile in the config)")
-		timeoutFlag = flag.Duration("timeout", 30*time.Second, "max time to wait for a message")
-		typeFlag    = flag.String("type", "", "protobuf message type to use for decoding")
+		configPath  string
+		profileName string
+		timeout     time.Duration
+		msgType     string
 		vars        = &varsFlag{}
 		topics      topicsFlag
 	)
-	flag.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
-	flag.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
-	flag.Parse()
+
+	setupFlags := func(fs *flag.FlagSet) {
+		fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
+		fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
+		fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a message")
+		fs.StringVar(&msgType, "type", "", "protobuf message type to use for decoding")
+		fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
+		fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
+	}
+
+	mode := "headers"
+	count := 1
+
+	switch cmd {
+	case "headers":
+		fs := flag.NewFlagSet("headers", flag.ExitOnError)
+		setupFlags(fs)
+		fs.Parse(os.Args[2:])
+	case "print":
+		mode = "print"
+		fs := flag.NewFlagSet("print", flag.ExitOnError)
+		setupFlags(fs)
+		fs.IntVar(&count, "count", 1, "number of messages to print")
+		fs.Parse(os.Args[2:])
+	default:
+		log.Fatalf("unknown command %q (expected 'headers' or 'print')", cmd)
+	}
 
 	if len(topics) == 0 {
 		log.Fatal("--topic is required")
 	}
 
-	configPath := *configFlag
 	if configPath == "" {
 		configPath = solace.DefaultConfigPath()
 	}
@@ -83,7 +117,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	profile, err := solace.SelectProfile(cfg, *profileFlag, configPath)
+	profile, err := solace.SelectProfile(cfg, profileName, configPath)
 	if err != nil {
 		log.Fatalf("profile: %v", err)
 	}
@@ -99,8 +133,8 @@ func main() {
 		log.Fatalf("build messaging service: %v", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for one message...\n",
-		profile.Name, strings.Join(topics, ","), profile.Host, profile.VPN, *timeoutFlag)
+	fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for messages...\n",
+		profile.Name, strings.Join(topics, ","), profile.Host, profile.VPN, timeout)
 
 	var registry *solace.ProtoRegistry
 	if len(profile.ProtoPaths) > 0 {
@@ -112,9 +146,11 @@ func main() {
 
 	opts := solace.ReceiveOptions{
 		Topics:      topics,
-		Timeout:     *timeoutFlag,
+		Timeout:     timeout,
 		Registry:    registry,
-		MessageType: *typeFlag,
+		MessageType: msgType,
+		Mode:        mode,
+		Count:       count,
 	}
 	if err := solace.Run(svc, opts); err != nil {
 		log.Fatal(err)

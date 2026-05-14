@@ -21,6 +21,8 @@ type ReceiveOptions struct {
 	Timeout     time.Duration
 	Registry    *ProtoRegistry
 	MessageType string
+	Mode        string
+	Count       int
 }
 
 // Run connects to the messaging service, subscribes to the given topic,
@@ -55,30 +57,43 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 		}
 	}()
 
-	msg, err := receiver.ReceiveMessage(opts.Timeout)
-	if err != nil {
-		return fmt.Errorf("receive: %w", err)
+	for i := 0; i < opts.Count; i++ {
+		msg, err := receiver.ReceiveMessage(opts.Timeout)
+		if err != nil {
+			return fmt.Errorf("receive: %w", err)
+		}
+		if err := PrintMessage(msg, opts); err != nil {
+			return fmt.Errorf("print message: %w", err)
+		}
 	}
-
-	PrintMessage(msg, opts)
 	return nil
 }
 
 // PrintMessage prints message details to stdout.
-func PrintMessage(msg message.InboundMessage, opts ReceiveOptions) {
-	fmt.Printf("Destination:       %s\n", msg.GetDestinationName())
-	var msgType string
-	if opts.MessageType != "" {
-		msgType = opts.MessageType
+func PrintMessage(msg message.InboundMessage, opts ReceiveOptions) error {
+	switch opts.Mode {
+	case "headers":
+		return printHeaders(msg)
+	case "print":
+		return printPayloadJSON(msg, opts)
+	default:
+		return fmt.Errorf("unknown mode: %q", opts.Mode)
 	}
+}
+
+func printHeaders(msg message.InboundMessage) error {
+	fmt.Printf("Destination:       %s\n", msg.GetDestinationName())
 	if v, ok := msg.GetApplicationMessageID(); ok {
 		fmt.Printf("AppMessageID:      %s\n", v)
 	}
 	if v, ok := msg.GetApplicationMessageType(); ok {
 		fmt.Printf("AppMessageType:    %s\n", v)
-		if msgType == "" {
-			msgType = v
-		}
+	}
+	if v, ok := msg.GetHTTPContentType(); ok {
+		fmt.Printf("HTTPContentType:   %s\n", v)
+	}
+	if v, ok := msg.GetHTTPContentEncoding(); ok {
+		fmt.Printf("HTTPContentEncoding:   %s\n", v)
 	}
 	if v, ok := msg.GetCorrelationID(); ok {
 		fmt.Printf("CorrelationID:     %s\n", v)
@@ -112,31 +127,53 @@ func PrintMessage(msg message.InboundMessage, opts ReceiveOptions) {
 
 	payload, _ := msg.GetPayloadAsBytes()
 	fmt.Printf("PayloadBytes:      %d\n", len(payload))
+	return nil
+}
 
-	if opts.Registry != nil && len(payload) > 0 && msgType != "" {
-		if idx := strings.LastIndex(msgType, "/"); idx >= 0 {
-			msgType = msgType[idx+1:]
-		}
-
-		desc, err := opts.Registry.FindMessage(msgType)
-		if err == nil {
-			dynMsg := dynamicpb.NewMessage(desc)
-			if err := proto.Unmarshal(payload, dynMsg); err == nil {
-				jsonBytes, err := protojson.MarshalOptions{
-					Multiline: true,
-					Resolver:  dynamicpb.NewTypes(opts.Registry.Files),
-				}.Marshal(dynMsg)
-				if err == nil {
-					fmt.Println("Payload JSON:")
-					fmt.Println(string(jsonBytes))
-				} else {
-					fmt.Printf("Failed to marshal to JSON: %v\n", err)
-				}
-			} else {
-				fmt.Printf("Failed to unmarshal protobuf: %v\n", err)
-			}
-		} else {
-			fmt.Printf("Message descriptor not found for %s: %v\n", msgType, err)
+func printPayloadJSON(msg message.InboundMessage, opts ReceiveOptions) error {
+	var msgType string
+	if opts.MessageType != "" {
+		msgType = opts.MessageType
+	}
+	if v, ok := msg.GetApplicationMessageType(); ok {
+		if msgType == "" {
+			msgType = v
 		}
 	}
+
+	payload, _ := msg.GetPayloadAsBytes()
+	if len(payload) == 0 {
+		return fmt.Errorf("message payload is empty")
+	}
+	if opts.Registry == nil {
+		return fmt.Errorf("no proto registry configured (set proto_paths in profile)")
+	}
+	if msgType == "" {
+		return fmt.Errorf("message type is unknown (use --type to specify explicitly)")
+	}
+
+	if idx := strings.LastIndex(msgType, "/"); idx >= 0 {
+		msgType = msgType[idx+1:]
+	}
+
+	desc, err := opts.Registry.FindMessage(msgType)
+	if err != nil {
+		return fmt.Errorf("message descriptor not found for %s: %w", msgType, err)
+	}
+
+	dynMsg := dynamicpb.NewMessage(desc)
+	if err := proto.Unmarshal(payload, dynMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal protobuf: %w", err)
+	}
+
+	jsonBytes, err := protojson.MarshalOptions{
+		Multiline: false,
+		Resolver:  dynamicpb.NewTypes(opts.Registry.Files),
+	}.Marshal(dynMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal to JSON: %w", err)
+	}
+
+	fmt.Println(string(jsonBytes))
+	return nil
 }
