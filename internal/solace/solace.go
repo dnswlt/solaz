@@ -3,7 +3,9 @@ package solace
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -25,9 +27,14 @@ type ReceiveOptions struct {
 	Count       int
 }
 
-// Run connects to the messaging service, subscribes to the given topic,
-// waits for a single message within the timeout, and prints its details.
+// Run connects to the messaging service, subscribes to the configured topics,
+// and dispatches every received message to a mode-specific handler.
 func Run(svc solace.MessagingService, opts ReceiveOptions) error {
+	handler, err := newHandler(opts)
+	if err != nil {
+		return err
+	}
+
 	if err := svc.Connect(); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
@@ -62,26 +69,37 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 		if err != nil {
 			return fmt.Errorf("receive: %w", err)
 		}
-		if err := PrintMessage(msg, opts); err != nil {
-			return fmt.Errorf("print message: %w", err)
+		if err := handler.handle(msg); err != nil {
+			return err
 		}
 	}
-	return nil
+
+	return handler.finish()
 }
 
-// PrintMessage prints message details to stdout.
-func PrintMessage(msg message.InboundMessage, opts ReceiveOptions) error {
+// messageHandler processes inbound messages one at a time and may emit a
+// summary once the receive loop completes.
+type messageHandler interface {
+	handle(msg message.InboundMessage) error
+	finish() error
+}
+
+func newHandler(opts ReceiveOptions) (messageHandler, error) {
 	switch opts.Mode {
 	case "headers":
-		return printHeaders(msg)
+		return &headersHandler{}, nil
 	case "print":
-		return printPayloadJSON(msg, opts)
+		return &printJSONHandler{registry: opts.Registry, messageType: opts.MessageType}, nil
+	case "stats":
+		return &statsHandler{topics: make(map[string]*topicStats)}, nil
 	default:
-		return fmt.Errorf("unknown mode: %q", opts.Mode)
+		return nil, fmt.Errorf("unknown mode: %q", opts.Mode)
 	}
 }
 
-func printHeaders(msg message.InboundMessage) error {
+type headersHandler struct{}
+
+func (h *headersHandler) handle(msg message.InboundMessage) error {
 	fmt.Printf("Destination:       %s\n", msg.GetDestinationName())
 	if v, ok := msg.GetApplicationMessageID(); ok {
 		fmt.Printf("AppMessageID:      %s\n", v)
@@ -130,13 +148,17 @@ func printHeaders(msg message.InboundMessage) error {
 	return nil
 }
 
-func printPayloadJSON(msg message.InboundMessage, opts ReceiveOptions) error {
-	var msgType string
-	if opts.MessageType != "" {
-		msgType = opts.MessageType
-	}
-	if v, ok := msg.GetApplicationMessageType(); ok {
-		if msgType == "" {
+func (h *headersHandler) finish() error { return nil }
+
+type printJSONHandler struct {
+	registry    *ProtoRegistry
+	messageType string
+}
+
+func (h *printJSONHandler) handle(msg message.InboundMessage) error {
+	msgType := h.messageType
+	if msgType == "" {
+		if v, ok := msg.GetApplicationMessageType(); ok {
 			msgType = v
 		}
 	}
@@ -145,7 +167,7 @@ func printPayloadJSON(msg message.InboundMessage, opts ReceiveOptions) error {
 	if len(payload) == 0 {
 		return fmt.Errorf("message payload is empty")
 	}
-	if opts.Registry == nil {
+	if h.registry == nil {
 		return fmt.Errorf("no proto registry configured (set proto_paths in profile)")
 	}
 	if msgType == "" {
@@ -156,7 +178,7 @@ func printPayloadJSON(msg message.InboundMessage, opts ReceiveOptions) error {
 		msgType = msgType[idx+1:]
 	}
 
-	desc, err := opts.Registry.FindMessage(msgType)
+	desc, err := h.registry.FindMessage(msgType)
 	if err != nil {
 		return fmt.Errorf("message descriptor not found for %s: %w", msgType, err)
 	}
@@ -168,7 +190,7 @@ func printPayloadJSON(msg message.InboundMessage, opts ReceiveOptions) error {
 
 	jsonBytes, err := protojson.MarshalOptions{
 		Multiline: false,
-		Resolver:  dynamicpb.NewTypes(opts.Registry.Files),
+		Resolver:  dynamicpb.NewTypes(h.registry.Files),
 	}.Marshal(dynMsg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal to JSON: %w", err)
@@ -176,4 +198,66 @@ func printPayloadJSON(msg message.InboundMessage, opts ReceiveOptions) error {
 
 	fmt.Println(string(jsonBytes))
 	return nil
+}
+
+func (h *printJSONHandler) finish() error { return nil }
+
+// topicStats stores aggregated statistics for a single topic.
+type topicStats struct {
+	Count     int
+	TotalSize int64
+}
+
+type statsHandler struct {
+	topics map[string]*topicStats
+}
+
+func (h *statsHandler) handle(msg message.InboundMessage) error {
+	topic := msg.GetDestinationName()
+	payload, _ := msg.GetPayloadAsBytes()
+	s := h.topics[topic]
+	if s == nil {
+		s = &topicStats{}
+		h.topics[topic] = s
+	}
+	s.Count++
+	s.TotalSize += int64(len(payload))
+	return nil
+}
+
+func (h *statsHandler) finish() error {
+	if len(h.topics) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(h.topics))
+	for t := range h.topics {
+		names = append(names, t)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		ci, cj := h.topics[names[i]].Count, h.topics[names[j]].Count
+		if ci != cj {
+			return ci > cj
+		}
+		return names[i] < names[j]
+	})
+
+	var totalCount int
+	var totalBytes int64
+	for _, s := range h.topics {
+		totalCount += s.Count
+		totalBytes += s.TotalSize
+	}
+
+	fmt.Println()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TOPIC\tCOUNT\tBYTES\tAVG BYTES")
+	for _, t := range names {
+		s := h.topics[t]
+		avg := float64(s.TotalSize) / float64(s.Count)
+		fmt.Fprintf(w, "%s\t%d\t%d\t%.1f\n", t, s.Count, s.TotalSize, avg)
+	}
+	avg := float64(totalBytes) / float64(totalCount)
+	fmt.Fprintf(w, "TOTAL\t%d\t%d\t%.1f\n", totalCount, totalBytes, avg)
+	return w.Flush()
 }
