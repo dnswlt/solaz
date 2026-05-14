@@ -1,0 +1,8 @@
+# Build artifacts
+/solaz
+
+# Local profile / credentials
+*.conf
+*.pem
+*.key
+*.crt
