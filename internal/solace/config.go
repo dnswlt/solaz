@@ -22,16 +22,17 @@ type Config struct {
 
 // Profile holds the connection settings for a single Solace broker.
 type Profile struct {
-	Name               string `json:"name"`                 // unique within the config
-	Host               string `json:"host"`                 // e.g. "tcps://broker.example.com:55443"
-	VPN                string `json:"vpn"`                  // message VPN name
-	ClientCertFile     string `json:"client_cert_file"`     // PEM-encoded client cert
-	ClientKeyFile      string `json:"client_key_file"`      // PEM-encoded private key
-	ClientKeyPass      string `json:"client_key_pass"`      // optional password for encrypted key
-	ClientCertUserName string `json:"client_cert_username"` // optional username for client-certificate auth
-	TrustStoreDir      string `json:"trust_store_dir"`      // dir with CA certs to trust
-	ClientName         string `json:"client_name"`          // optional client name
-	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
+	Name               string   `json:"name"`                 // unique within the config
+	Host               string   `json:"host"`                 // e.g. "tcps://broker.example.com:55443"
+	VPN                string   `json:"vpn"`                  // message VPN name
+	ClientCertFile     string   `json:"client_cert_file"`     // PEM-encoded client cert
+	ClientKeyFile      string   `json:"client_key_file"`      // PEM-encoded private key
+	ClientKeyPass      string   `json:"client_key_pass"`      // optional password for encrypted key
+	ClientCertUserName string   `json:"client_cert_username"` // optional username for client-certificate auth
+	TrustStoreDir      string   `json:"trust_store_dir"`      // dir with CA certs to trust
+	ClientName         string   `json:"client_name"`          // optional client name
+	InsecureSkipVerify bool     `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
+	ProtoPaths         []string `json:"proto_paths"`          // paths to search for .proto files
 }
 
 func DefaultConfigPath() string {
@@ -111,6 +112,9 @@ func ExpandProfile(p *Profile, vars map[string]string) error {
 	}
 	for _, f := range fields {
 		*f = os.Expand(*f, mapper)
+	}
+	for i, f := range p.ProtoPaths {
+		p.ProtoPaths[i] = os.Expand(f, mapper)
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing template variables: %s", strings.Join(missing, ", "))

@@ -49,6 +49,7 @@ func main() {
 		profileFlag = flag.String("profile", "", "profile name to use (defaults to the first profile in the config)")
 		topicFlag   = flag.String("topic", "", "topic subscription pattern (required)")
 		timeoutFlag = flag.Duration("timeout", 30*time.Second, "max time to wait for a message")
+		typeFlag    = flag.String("type", "", "protobuf message type to use for decoding")
 		vars        = &varsFlag{}
 	)
 	flag.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
@@ -85,9 +86,19 @@ func main() {
 	fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for one message...\n",
 		profile.Name, *topicFlag, profile.Host, profile.VPN, *timeoutFlag)
 
+	var registry *solace.ProtoRegistry
+	if len(profile.ProtoPaths) > 0 {
+		registry, err = solace.NewProtoRegistry(profile.ProtoPaths)
+		if err != nil {
+			log.Fatalf("proto registry: %v", err)
+		}
+	}
+
 	opts := solace.ReceiveOptions{
-		Topic:   *topicFlag,
-		Timeout: *timeoutFlag,
+		Topic:       *topicFlag,
+		Timeout:     *timeoutFlag,
+		Registry:    registry,
+		MessageType: *typeFlag,
 	}
 	if err := solace.Run(svc, opts); err != nil {
 		log.Fatal(err)
