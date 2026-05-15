@@ -100,51 +100,63 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 type headersHandler struct{}
 
 func (h *headersHandler) handle(msg message.InboundMessage) error {
-	fmt.Printf("Destination:       %s\n", msg.GetDestinationName())
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Destination:\t%s\n", msg.GetDestinationName())
 	if v, ok := msg.GetApplicationMessageID(); ok {
-		fmt.Printf("AppMessageID:      %s\n", v)
+		fmt.Fprintf(w, "AppMessageID:\t%s\n", v)
 	}
 	if v, ok := msg.GetApplicationMessageType(); ok {
-		fmt.Printf("AppMessageType:    %s\n", v)
+		fmt.Fprintf(w, "AppMessageType:\t%s\n", v)
 	}
 	if v, ok := msg.GetHTTPContentType(); ok {
-		fmt.Printf("HTTPContentType:   %s\n", v)
+		fmt.Fprintf(w, "HTTPContentType:\t%s\n", v)
 	}
 	if v, ok := msg.GetHTTPContentEncoding(); ok {
-		fmt.Printf("HTTPContentEncoding:   %s\n", v)
+		fmt.Fprintf(w, "HTTPContentEncoding:\t%s\n", v)
 	}
 	if v, ok := msg.GetCorrelationID(); ok {
-		fmt.Printf("CorrelationID:     %s\n", v)
+		fmt.Fprintf(w, "CorrelationID:\t%s\n", v)
 	}
 	if v, ok := msg.GetSenderID(); ok {
-		fmt.Printf("SenderID:          %s\n", v)
+		fmt.Fprintf(w, "SenderID:\t%s\n", v)
 	}
 	if v, ok := msg.GetSenderTimestamp(); ok {
-		fmt.Printf("SenderTimestamp:   %s\n", v.Format(time.RFC3339Nano))
+		fmt.Fprintf(w, "SenderTimestamp:\t%s\n", v.Format(time.RFC3339Nano))
 	}
 	if v, ok := msg.GetTimeStamp(); ok {
-		fmt.Printf("ReceiveTimestamp:  %s\n", v.Format(time.RFC3339Nano))
+		fmt.Fprintf(w, "ReceiveTimestamp:\t%s\n", v.Format(time.RFC3339Nano))
 	}
 	if v, ok := msg.GetSequenceNumber(); ok {
-		fmt.Printf("SequenceNumber:    %d\n", v)
+		fmt.Fprintf(w, "SequenceNumber:\t%d\n", v)
 	}
-	if exp := msg.GetExpiration(); !exp.IsZero() {
-		fmt.Printf("Expiration:        %s\n", exp.Format(time.RFC3339Nano))
+	if exp := msg.GetExpiration(); !exp.IsZero() && exp.Unix() != 0 {
+		fmt.Fprintf(w, "Expiration:\t%s\n", exp.Format(time.RFC3339Nano))
 	}
 	if v, ok := msg.GetPriority(); ok {
-		fmt.Printf("Priority:          %d\n", v)
+		fmt.Fprintf(w, "Priority:\t%d\n", v)
 	}
-	fmt.Printf("ClassOfService:    %d\n", msg.GetClassOfService())
+	fmt.Fprintf(w, "ClassOfService:\t%d\n", msg.GetClassOfService())
+	payload, _ := msg.GetPayloadAsBytes()
+	fmt.Fprintf(w, "PayloadBytes:\t%d\n", len(payload))
+	if err := w.Flush(); err != nil {
+		return err
+	}
 
 	if props := msg.GetProperties(); len(props) > 0 {
 		fmt.Println("Properties:")
-		for k, v := range props {
-			fmt.Printf("  %s = %v\n", k, v)
+		keys := make([]string, 0, len(props))
+		for k := range props {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		pw := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
+		for _, k := range keys {
+			fmt.Fprintf(pw, "  %s\t=\t%v\n", k, props[k])
+		}
+		if err := pw.Flush(); err != nil {
+			return err
 		}
 	}
-
-	payload, _ := msg.GetPayloadAsBytes()
-	fmt.Printf("PayloadBytes:      %d\n", len(payload))
 	return nil
 }
 

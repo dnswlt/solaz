@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strings"
@@ -11,6 +10,11 @@ import (
 
 	"github.com/dnswlt/hackz/solaz/internal/solace"
 )
+
+func fatalf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", a...)
+	os.Exit(1)
+}
 
 // topicsFlag collects repeated --topic flags into a slice.
 type topicsFlag []string
@@ -109,11 +113,11 @@ func main() {
 		fs.IntVar(&count, "count", 100, "number of messages to aggregate")
 		fs.Parse(os.Args[2:])
 	default:
-		log.Fatalf("unknown command %q (expected 'headers', 'print', or 'stats')", cmd)
+		fatalf("unknown command %q (expected 'headers', 'print', or 'stats')", cmd)
 	}
 
 	if len(topics) == 0 {
-		log.Fatal("--topic is required")
+		fatalf("--topic is required")
 	}
 
 	if configPath == "" {
@@ -121,22 +125,22 @@ func main() {
 	}
 	cfg, err := solace.LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		fatalf("config: %v", err)
 	}
 	profile, err := solace.SelectProfile(cfg, profileName, configPath)
 	if err != nil {
-		log.Fatalf("profile: %v", err)
+		fatalf("profile: %v", err)
 	}
 	if err := solace.ExpandProfile(profile, vars.m); err != nil {
-		log.Fatalf("profile %q: %v", profile.Name, err)
+		fatalf("profile %q: %v", profile.Name, err)
 	}
 	if err := solace.ValidateProfile(profile, configPath); err != nil {
-		log.Fatalf("profile: %v", err)
+		fatalf("profile: %v", err)
 	}
 
 	svc, err := solace.BuildService(profile)
 	if err != nil {
-		log.Fatalf("build messaging service: %v", err)
+		fatalf("build messaging service: %v", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for messages...\n",
@@ -146,7 +150,7 @@ func main() {
 	if len(profile.ProtoPaths) > 0 {
 		registry, err = solace.NewProtoRegistry(profile.ProtoPaths)
 		if err != nil {
-			log.Fatalf("proto registry: %v", err)
+			fatalf("proto registry: %v", err)
 		}
 	}
 
@@ -159,6 +163,6 @@ func main() {
 		Count:       count,
 	}
 	if err := solace.Run(svc, opts); err != nil {
-		log.Fatal(err)
+		fatalf("%v", err)
 	}
 }
