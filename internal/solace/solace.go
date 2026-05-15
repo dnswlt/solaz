@@ -1,6 +1,7 @@
 package solace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -21,6 +22,7 @@ import (
 type ReceiveOptions struct {
 	Topics      []string
 	Timeout     time.Duration
+	MaxRuntime  time.Duration
 	Registry    *ProtoRegistry
 	MessageType string
 	Mode        string
@@ -64,9 +66,28 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 		}
 	}()
 
+	var deadline time.Time
+	if opts.MaxRuntime > 0 {
+		deadline = time.Now().Add(opts.MaxRuntime)
+	}
+
 	for i := 0; i < opts.Count; i++ {
-		msg, err := receiver.ReceiveMessage(opts.Timeout)
+		timeout := opts.Timeout
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				break
+			}
+			if remaining < timeout {
+				timeout = remaining
+			}
+		}
+		msg, err := receiver.ReceiveMessage(timeout)
 		if err != nil {
+			var timeoutErr *solace.TimeoutError
+			if errors.As(err, &timeoutErr) && !deadline.IsZero() && !time.Now().Before(deadline) {
+				break
+			}
 			return fmt.Errorf("receive: %w", err)
 		}
 		if err := handler.handle(msg); err != nil {

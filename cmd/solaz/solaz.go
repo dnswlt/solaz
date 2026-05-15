@@ -78,6 +78,7 @@ func main() {
 		configPath  string
 		profileName string
 		timeout     time.Duration
+		maxRuntime  time.Duration
 		msgType     string
 		vars        = &varsFlag{}
 		topics      topicsFlag
@@ -86,7 +87,8 @@ func main() {
 	setupFlags := func(fs *flag.FlagSet) {
 		fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 		fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
-		fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a message")
+		fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
+		fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
 		fs.StringVar(&msgType, "type", "", "protobuf message type to use for decoding")
 		fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 		fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
@@ -157,6 +159,7 @@ func main() {
 	opts := solace.ReceiveOptions{
 		Topics:      topics,
 		Timeout:     timeout,
+		MaxRuntime:  maxRuntime,
 		Registry:    registry,
 		MessageType: msgType,
 		Mode:        mode,
