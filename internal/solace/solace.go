@@ -61,7 +61,9 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 		return fmt.Errorf("start receiver: %w", err)
 	}
 	defer func() {
-		if err := receiver.Terminate(5 * time.Second); err != nil {
+		err := receiver.Terminate(5 * time.Second)
+		var incomplete *solace.IncompleteMessageDeliveryError
+		if err != nil && !errors.As(err, &incomplete) {
 			fmt.Fprintf(os.Stderr, "warning: terminate receiver: %v\n", err)
 		}
 	}()
