@@ -111,7 +111,7 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 	switch opts.Mode {
 	case "headers":
 		return &headersHandler{}, nil
-	case "print":
+	case "payload":
 		return &printJSONHandler{registry: opts.Registry, messageType: opts.MessageType}, nil
 	case "stats":
 		return &statsHandler{topics: make(map[string]*topicStats)}, nil

@@ -64,13 +64,13 @@ func (v *varsFlag) Set(s string) error {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <command> [flags]\n\nCommands:\n  headers   Print message headers and payload size\n  print     Print message payloads as single-line JSON\n  stats     Aggregate metrics across messages\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <command> [flags]\n\nCommands:\n  headers   Print message headers and payload size\n  payload   Print message payloads as single-line JSON\n  stats     Aggregate metrics across messages\n", os.Args[0])
 		os.Exit(1)
 	}
 
 	cmd := os.Args[1]
 	if cmd == "-h" || cmd == "--help" {
-		fmt.Fprintf(os.Stderr, "Usage: %s <command> [flags]\n\nCommands:\n  headers   Print message headers and payload size\n  print     Print message payloads as single-line JSON\n  stats     Aggregate metrics across messages\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <command> [flags]\n\nCommands:\n  headers   Print message headers and payload size\n  payload   Print message payloads as single-line JSON\n  stats     Aggregate metrics across messages\n", os.Args[0])
 		os.Exit(0)
 	}
 
@@ -102,9 +102,9 @@ func main() {
 		fs := flag.NewFlagSet("headers", flag.ExitOnError)
 		setupFlags(fs)
 		fs.Parse(os.Args[2:])
-	case "print":
-		mode = "print"
-		fs := flag.NewFlagSet("print", flag.ExitOnError)
+	case "payload":
+		mode = "payload"
+		fs := flag.NewFlagSet("payload", flag.ExitOnError)
 		setupFlags(fs)
 		fs.IntVar(&count, "count", 1, "number of messages to print")
 		fs.Parse(os.Args[2:])
@@ -115,7 +115,7 @@ func main() {
 		fs.IntVar(&count, "count", 100, "number of messages to aggregate")
 		fs.Parse(os.Args[2:])
 	default:
-		fatalf("unknown command %q (expected 'headers', 'print', or 'stats')", cmd)
+		fatalf("unknown command %q (expected 'headers', 'payload', or 'stats')", cmd)
 	}
 
 	if len(topics) == 0 {

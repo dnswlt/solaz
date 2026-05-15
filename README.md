@@ -2,6 +2,67 @@
 
 A simple Solace subscriber CLI.
 
+## Usage
+
+```sh
+solaz <command> [flags]
+```
+
+### Commands
+
+- `headers` — print message headers and payload byte size for each received message.
+- `payload` — print message payloads as single-line JSON. Decodes protobuf
+  payloads using the descriptors loaded from `proto_paths`.
+- `stats`   — aggregate per-topic count, total bytes, and average size across
+  messages.
+
+### Flags
+
+Flags common to all commands:
+
+- `--topic PATTERN` — subscription pattern (required, may be repeated for
+  multiple subscriptions).
+- `--profile NAME` — profile from the config file (defaults to the first
+  entry).
+- `--config PATH` — config file path (default `~/.solaz.conf`).
+- `--timeout DUR` — max wait for a single message before erroring out
+  (default `30s`).
+- `--max-runtime DUR` — max total time spent receiving; `0` disables
+  (default `0`).
+- `--var KEY=VALUE` — template variable for profile expansion (repeatable).
+- `--type FQNAME` — protobuf message type for `payload`; overrides the
+  per-message hint.
+
+Per-command flags:
+
+- `payload`: `--count N` (default `1`) — number of messages to print.
+- `stats`: `--count N` (default `100`) — number of messages to aggregate.
+
+The loop stops when `--count` is reached *or* `--max-runtime` elapses,
+whichever comes first.
+
+### Examples
+
+```sh
+# First profile, headers for one message
+solaz headers --topic 'foo/>'
+
+# Aggregate up to 1000 messages or 2 minutes, whichever first
+solaz stats --topic 'foo/>' --count 1000 --max-runtime 2m
+
+# Print 5 payloads as JSON, forcing a specific proto type
+solaz payload --topic 'a/b/*' --count 5 --type com.example.MyMessage
+
+# Subscribe to multiple topics at once
+solaz stats --topic 'foo/>' --topic 'bar/baz/*'
+
+# Use a named profile and a longer custom receive timeout
+solaz payload --topic 'x/>' --profile prod --timeout 1m
+```
+
+The CLI connects with client-certificate auth, runs the receive loop, and
+disconnects when done.
+
 ## Config
 
 `solaz` reads a JSON config file (default: `~/.solaz.conf`, override with
@@ -30,7 +91,8 @@ Example `~/.solaz.conf`:
       "client_key_file":      "/etc/solaz/prod.key",
       "client_key_pass":      "hunter2",
       "client_cert_username": "svc-solaz-prod",
-      "trust_store_dir":      "/etc/solaz/ca/"
+      "trust_store_dir":      "/etc/solaz/ca/",
+      "proto_paths":          ["/etc/solaz/protos"]
     }
   ]
 }
@@ -53,8 +115,11 @@ Optional fields:
   connected-clients list. Cosmetic; not used for authentication.
 - `insecure_skip_verify` — dev-only. Disables broker certificate
   validation (chain *and* hostname). Prints a warning to stderr.
+- `proto_paths` — list of directories searched for `.proto` files used by
+  the `payload` command to decode protobuf payloads to JSON. Required for
+  `payload` if message payloads are protobuf-encoded.
 
-## Templated profiles
+### Templated profiles
 
 Any string field in a profile may contain `${VAR}` (or `$VAR`)
 placeholders. Provide values on the command line with `--var KEY=VALUE`
@@ -80,7 +145,7 @@ duplicating entries:
 ```
 
 ```sh
-solaz --topic 'foo/>' \
+solaz headers --topic 'foo/>' \
       --var namespace=dev-payments-1 \
       --var vpn=payments-dev \
       --var creds=$HOME/solaz-creds
@@ -91,7 +156,7 @@ Expansion happens before validation, so a templated profile with no
 rather than failing later at TLS time. Profiles with no placeholders are
 unaffected.
 
-## Populating the trust store
+### Populating the trust store
 
 `trust_store_dir` is a directory of CA certs in OpenSSL hashed-directory
 format (filenames are `<subject-hash>.0`, not arbitrary `*.pem`). The
@@ -136,16 +201,3 @@ If you still see `20 (unable to get local issuer certificate)`, the broker
 isn't sending its intermediate(s) in the handshake. Obtain the missing CA
 PEM out-of-band (broker admin, your org's PKI), drop it into `$TRUST_DIR`,
 and re-run `openssl rehash`.
-
-## Usage
-
-```sh
-solaz --topic 'foo/>'                       # first profile
-solaz --topic 'a/b/*' --profile prod        # named profile
-solaz --topic 'foo/>' --timeout 1m          # custom receive timeout
-solaz --config ./other.conf --topic 'x/>'   # alternate config file
-```
-
-The CLI connects with client-certificate auth, subscribes to the topic
-pattern, waits for one message, prints its headers and payload byte size,
-then disconnects.
