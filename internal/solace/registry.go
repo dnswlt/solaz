@@ -14,6 +14,9 @@ import (
 
 	_ "google.golang.org/genproto/googleapis/type/date"
 	_ "google.golang.org/genproto/googleapis/type/datetime"
+	_ "google.golang.org/genproto/googleapis/type/dayofweek"
+	_ "google.golang.org/genproto/googleapis/type/decimal"
+	_ "google.golang.org/genproto/googleapis/type/fraction"
 	_ "google.golang.org/genproto/googleapis/type/interval"
 	_ "google.golang.org/genproto/googleapis/type/latlng"
 	_ "google.golang.org/genproto/googleapis/type/money"
