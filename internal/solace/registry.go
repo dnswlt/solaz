@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/bufbuild/protocompile"
@@ -72,6 +73,26 @@ func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
 	}
 
 	return &ProtoRegistry{Files: reg}, nil
+}
+
+// MessageNames returns the fully-qualified names of every message type in
+// the registry (including nested types), sorted alphabetically.
+func (r *ProtoRegistry) MessageNames() []string {
+	var names []string
+	r.Files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		collectMessageNames(fd.Messages(), &names)
+		return true
+	})
+	sort.Strings(names)
+	return names
+}
+
+func collectMessageNames(msgs protoreflect.MessageDescriptors, out *[]string) {
+	for i := 0; i < msgs.Len(); i++ {
+		md := msgs.Get(i)
+		*out = append(*out, string(md.FullName()))
+		collectMessageNames(md.Messages(), out)
+	}
 }
 
 // FindMessage looks up a message descriptor by full name.

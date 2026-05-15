@@ -152,7 +152,6 @@ func BuildService(p *Profile) (solacemsg.MessagingService, error) {
 		props[config.ClientPropertyName] = p.ClientName
 	}
 	if p.InsecureSkipVerify {
-		fmt.Fprintf(os.Stderr, "WARNING: profile %q has insecure_skip_verify=true; broker certificate will NOT be validated.\n", p.Name)
 		props[config.TransportLayerSecurityPropertyCertValidated] = false
 		props[config.TransportLayerSecurityPropertyCertValidateServername] = false
 	}

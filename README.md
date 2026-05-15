@@ -15,6 +15,9 @@ solaz <command> [flags]
   payloads using the descriptors loaded from `proto_paths`.
 - `stats`   — aggregate per-topic count, total bytes, and average size across
   messages.
+- `types`   — list all protobuf message types known to the proto registry
+  (compiled from `proto_paths`). Does not connect to a broker; useful for
+  discovering the right value to pass to `--type`.
 
 ### Flags
 
@@ -58,7 +61,13 @@ solaz stats --topic 'foo/>' --topic 'bar/baz/*'
 
 # Use a named profile and a longer custom receive timeout
 solaz payload --topic 'x/>' --profile prod --timeout 1m
+
+# List every protobuf message type the registry knows about
+solaz types --profile prod
 ```
+
+The `types` command accepts only `--config`, `--profile`, and `--var`;
+receive-related flags don't apply.
 
 The CLI connects with client-certificate auth, runs the receive loop, and
 disconnects when done.
