@@ -132,8 +132,8 @@ func runReceive(profile *solace.Profile, opts solace.ReceiveOptions) {
 		fatalf("build messaging service: %v", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for messages...\n",
-		profile.Name, strings.Join(opts.Topics, ","), profile.Host, profile.VPN, opts.Timeout)
+	// fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for messages...\n",
+	// 	profile.Name, strings.Join(opts.Topics, ","), profile.Host, profile.VPN, opts.Timeout)
 
 	if err := solace.Run(svc, opts); err != nil {
 		fatalf("%v", err)
