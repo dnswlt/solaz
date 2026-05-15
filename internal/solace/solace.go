@@ -311,15 +311,12 @@ func (h *statsHandler) finish() error {
 }
 
 func formatBytes(b float64) string {
-	if b < 100000 {
+	if b < 1000000 {
 		return strings.TrimSuffix(fmt.Sprintf("%.1f", b), ".0")
 	}
 	const unit = 1024
-	if b < unit*unit {
-		return fmt.Sprintf("%.1f kiB", b/unit)
-	}
 	if b < unit*unit*unit {
-		return fmt.Sprintf("%.1f MiB", b/(unit*unit))
+		return fmt.Sprintf("%.1fM", b/(unit*unit))
 	}
-	return fmt.Sprintf("%.1f GiB", b/(unit*unit*unit))
+	return fmt.Sprintf("%.1fG", b/(unit*unit*unit))
 }
