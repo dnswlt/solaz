@@ -128,8 +128,10 @@ Optional fields:
   the `payload` command to decode protobuf payloads to JSON. Required for
   `payload` if message payloads are protobuf-encoded.
 - `topic_types` — map from a Solace topic subscription pattern (with
-  `*` matching one level and `>` matching one or more trailing levels)
-  to a fully-qualified protobuf message type. When `--type` is not set,
+  `*` matching one level, `*` as a suffix to a level part acting as a
+  prefix wildcard within that level — e.g. `d-*` matches `d-anything` —
+  and `>` matching one or more trailing levels) to a fully-qualified
+  protobuf message type. When `--type` is not set,
   the `payload` command matches each message's concrete destination
   against these patterns to pick a type; the most specific match wins
   (more literal segments first, then more segments overall), and an

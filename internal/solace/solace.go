@@ -116,7 +116,7 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 		return &printJSONHandler{
 			registry:    opts.Registry,
 			messageType: opts.MessageType,
-			topicTypes:  opts.TopicTypes,
+			topicIndex:  newTopicTypeIndex(opts.TopicTypes),
 		}, nil
 	case "stats":
 		return &statsHandler{topics: make(map[string]*topicStats)}, nil
@@ -193,13 +193,13 @@ func (h *headersHandler) finish() error { return nil }
 type printJSONHandler struct {
 	registry    *ProtoRegistry
 	messageType string
-	topicTypes  map[string]string
+	topicIndex  *topicTypeIndex
 }
 
 func (h *printJSONHandler) handle(msg message.InboundMessage) error {
 	msgType := h.messageType
-	if msgType == "" && len(h.topicTypes) > 0 {
-		mt, err := lookupTopicType(msg.GetDestinationName(), h.topicTypes)
+	if msgType == "" {
+		mt, err := h.topicIndex.Lookup(msg.GetDestinationName())
 		if err != nil {
 			return err
 		}

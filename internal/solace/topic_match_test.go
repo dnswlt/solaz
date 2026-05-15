@@ -1,6 +1,18 @@
 package solace
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// matchTopicPattern reports whether topic matches a Solace topic
+// subscription pattern. `>` matches one or more trailing levels (only valid
+// at the end of the pattern). `*` matches one full level, and as a suffix
+// at the end of a level part it acts as a prefix wildcard within that
+// level (e.g. `d-*` matches `d-anything`).
+func matchTopicPattern(topic, pattern string) bool {
+	return matchTopicLevels(strings.Split(topic, "/"), strings.Split(pattern, "/"))
+}
 
 func TestMatchTopicPattern(t *testing.T) {
 	cases := []struct {
@@ -28,6 +40,13 @@ func TestMatchTopicPattern(t *testing.T) {
 		{"combined wildcards match", "trades/orders/abc/def", "*/orders/>", true},
 		{"combined wildcards mismatch literal", "trades/fills/abc", "*/orders/>", false},
 
+		{"prefix wildcard matches", "foo/d-bar", "foo/d-*", true},
+		{"prefix wildcard rejects different prefix", "foo/x-bar", "foo/d-*", false},
+		{"prefix wildcard rejects no prefix", "foo/bar", "foo/d-*", false},
+		{"prefix wildcard does not span levels", "foo/d-bar/baz", "foo/d-*", false},
+		{"prefix wildcard at first level", "d-foo/bar", "d-*/bar", true},
+		{"prefix wildcard combined with multi", "trades/d-orders/42", "trades/d-*/>", true},
+
 		{"single-segment topic, > pattern", "foo", ">", true},
 		{"two-segment topic, > pattern", "foo/bar", ">", true},
 	}
@@ -41,9 +60,13 @@ func TestMatchTopicPattern(t *testing.T) {
 	}
 }
 
-func TestLookupTopicType(t *testing.T) {
+func TestTopicTypeIndexLookup(t *testing.T) {
+	lookup := func(topic string, mappings map[string]string) (string, error) {
+		return newTopicTypeIndex(mappings).Lookup(topic)
+	}
+
 	t.Run("empty map", func(t *testing.T) {
-		mt, err := lookupTopicType("foo/bar", nil)
+		mt, err := lookup("foo/bar", nil)
 		if err != nil || mt != "" {
 			t.Errorf("got (%q, %v), want (\"\", nil)", mt, err)
 		}
@@ -51,7 +74,7 @@ func TestLookupTopicType(t *testing.T) {
 
 	t.Run("no match", func(t *testing.T) {
 		m := map[string]string{"a/>": "A"}
-		mt, err := lookupTopicType("foo/bar", m)
+		mt, err := lookup("foo/bar", m)
 		if err != nil || mt != "" {
 			t.Errorf("got (%q, %v), want (\"\", nil)", mt, err)
 		}
@@ -59,7 +82,7 @@ func TestLookupTopicType(t *testing.T) {
 
 	t.Run("single match", func(t *testing.T) {
 		m := map[string]string{"trades/>": "Trade"}
-		mt, err := lookupTopicType("trades/orders/42", m)
+		mt, err := lookup("trades/orders/42", m)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -70,10 +93,10 @@ func TestLookupTopicType(t *testing.T) {
 
 	t.Run("more literal segments wins", func(t *testing.T) {
 		m := map[string]string{
-			"trades/>":         "Trade",
-			"trades/orders/*":  "Order",
+			"trades/>":        "Trade",
+			"trades/orders/*": "Order",
 		}
-		mt, err := lookupTopicType("trades/orders/42", m)
+		mt, err := lookup("trades/orders/42", m)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -89,7 +112,7 @@ func TestLookupTopicType(t *testing.T) {
 			"trades/>":   "Generic",
 			"trades/*/>": "Detailed",
 		}
-		mt, err := lookupTopicType("trades/orders/42", m)
+		mt, err := lookup("trades/orders/42", m)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -104,20 +127,48 @@ func TestLookupTopicType(t *testing.T) {
 			"trades/*": "A",
 			"*/orders": "B",
 		}
-		mt, err := lookupTopicType("trades/orders", m)
+		mt, err := lookup("trades/orders", m)
 		if err == nil {
 			t.Fatalf("expected error, got %q", mt)
 		}
 	})
 
+	t.Run("prefix wildcard beats bare wildcard", func(t *testing.T) {
+		m := map[string]string{
+			"foo/*":   "Any",
+			"foo/d-*": "Detailed",
+		}
+		mt, err := lookup("foo/d-bar", m)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mt != "Detailed" {
+			t.Errorf("got %q, want %q", mt, "Detailed")
+		}
+	})
+
+	t.Run("full literal beats prefix wildcard", func(t *testing.T) {
+		m := map[string]string{
+			"foo/d-bar": "Exact",
+			"foo/d-*":   "Prefix",
+		}
+		mt, err := lookup("foo/d-bar", m)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mt != "Exact" {
+			t.Errorf("got %q, want %q", mt, "Exact")
+		}
+	})
+
 	t.Run("most-specific wins over many", func(t *testing.T) {
 		m := map[string]string{
-			">":                       "Catchall",
-			"trades/>":                "Trade",
-			"trades/orders/>":         "Order",
-			"trades/orders/europe/>":  "EUOrder",
+			">":                      "Catchall",
+			"trades/>":               "Trade",
+			"trades/orders/>":        "Order",
+			"trades/orders/europe/>": "EUOrder",
 		}
-		mt, err := lookupTopicType("trades/orders/europe/42", m)
+		mt, err := lookup("trades/orders/europe/42", m)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

@@ -2,15 +2,13 @@ package solace
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
-// matchTopicPattern reports whether topic matches a Solace topic
-// subscription pattern. `*` matches exactly one level; `>` matches one or
-// more trailing levels (only valid at the end of the pattern).
-func matchTopicPattern(topic, pattern string) bool {
-	pl := strings.Split(pattern, "/")
-	tl := strings.Split(topic, "/")
+// matchTopicLevels is matchTopicPattern over pre-split slices, so callers
+// that match the same topic against many patterns can split each only once.
+func matchTopicLevels(tl, pl []string) bool {
 	for i, p := range pl {
 		if p == ">" {
 			if i != len(pl)-1 {
@@ -21,7 +19,10 @@ func matchTopicPattern(topic, pattern string) bool {
 		if i >= len(tl) {
 			return false
 		}
-		if p == "*" {
+		if strings.HasSuffix(p, "*") {
+			if !strings.HasPrefix(tl[i], p[:len(p)-1]) {
+				return false
+			}
 			continue
 		}
 		if p != tl[i] {
@@ -31,53 +32,85 @@ func matchTopicPattern(topic, pattern string) bool {
 	return len(tl) == len(pl)
 }
 
-// lookupTopicType returns the message type whose pattern best matches the
-// given topic. Specificity is ranked by (literal segments, total segments);
-// an unresolvable tie returns an error so the user can disambiguate. No
-// match returns an empty string and a nil error.
-func lookupTopicType(topic string, mappings map[string]string) (string, error) {
-	type match struct {
-		pattern  string
-		msgType  string
-		literals int
-		segments int
+// topicTypeIndex precomputes split patterns and specificity scores from a
+// topic_types map, sorted from most to least specific. Lookup against an
+// incoming topic is then a single pass over the slice with no per-message
+// allocation beyond splitting the topic itself.
+type topicTypeIndex struct {
+	entries []topicTypeEntry
+}
+
+type topicTypeEntry struct {
+	pattern     string
+	msgType     string
+	segments    []string
+	specificity int
+}
+
+// newTopicTypeIndex preprocesses the given mappings. Returns nil for an
+// empty map so Lookup on a no-mapping profile is a cheap nil-check.
+func newTopicTypeIndex(mappings map[string]string) *topicTypeIndex {
+	if len(mappings) == 0 {
+		return nil
 	}
-	var best []match
+	entries := make([]topicTypeEntry, 0, len(mappings))
 	for pat, mt := range mappings {
-		if !matchTopicPattern(topic, pat) {
-			continue
-		}
 		segs := strings.Split(pat, "/")
-		literals := 0
+		spec := 0
 		for _, s := range segs {
-			if s != "*" && s != ">" {
-				literals++
+			switch {
+			case s == "*" || s == ">":
+				// adds 0
+			case strings.HasSuffix(s, "*"):
+				spec++
+			default:
+				spec += 2
 			}
 		}
-		m := match{pat, mt, literals, len(segs)}
-		if len(best) == 0 {
-			best = []match{m}
+		entries = append(entries, topicTypeEntry{
+			pattern:     pat,
+			msgType:     mt,
+			segments:    segs,
+			specificity: spec,
+		})
+	}
+	// Most specific first; segment count as tiebreaker. Equal-ranked
+	// entries stay adjacent so Lookup can detect ambiguity by scanning
+	// the head of the slice.
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].specificity != entries[j].specificity {
+			return entries[i].specificity > entries[j].specificity
+		}
+		return len(entries[i].segments) > len(entries[j].segments)
+	})
+	return &topicTypeIndex{entries: entries}
+}
+
+// Lookup returns the message type whose pattern best matches the topic.
+// No match returns ("", nil). A tie between equally-specific patterns
+// returns an error so the user can disambiguate.
+func (idx *topicTypeIndex) Lookup(topic string) (string, error) {
+	if idx == nil {
+		return "", nil
+	}
+	tl := strings.Split(topic, "/")
+	var matched *topicTypeEntry
+	for i := range idx.entries {
+		e := &idx.entries[i]
+		if matched != nil &&
+			(e.specificity != matched.specificity || len(e.segments) != len(matched.segments)) {
+			break
+		}
+		if !matchTopicLevels(tl, e.segments) {
 			continue
 		}
-		cmp := func(a, b match) int {
-			if a.literals != b.literals {
-				return a.literals - b.literals
-			}
-			return a.segments - b.segments
+		if matched != nil {
+			return "", fmt.Errorf("topic %q matches multiple equally-specific topic_types patterns: %q and %q", topic, matched.pattern, e.pattern)
 		}
-		switch c := cmp(m, best[0]); {
-		case c > 0:
-			best = []match{m}
-		case c == 0:
-			best = append(best, m)
-		}
+		matched = e
 	}
-	switch len(best) {
-	case 0:
+	if matched == nil {
 		return "", nil
-	case 1:
-		return best[0].msgType, nil
-	default:
-		return "", fmt.Errorf("topic %q matches multiple equally-specific topic_types patterns: %q and %q", topic, best[0].pattern, best[1].pattern)
 	}
+	return matched.msgType, nil
 }

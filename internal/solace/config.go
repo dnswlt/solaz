@@ -34,13 +34,14 @@ type Profile struct {
 	InsecureSkipVerify bool     `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
 	ProtoPaths         []string `json:"proto_paths"`          // paths to search for .proto files
 
-	// TopicTypes maps a Solace topic subscription pattern (with `*` and
-	// `>` wildcards) to a fully-qualified protobuf message type. At
-	// decode time the `payload` command matches each message's concrete
-	// destination against these patterns; the most specific match wins.
-	// An entry here takes precedence over the message's
-	// application_message_type header, but is overridden by an explicit
-	// --type flag.
+	// TopicTypes maps a Solace topic subscription pattern (with `*` as
+	// a single-level wildcard or a prefix wildcard within a level — e.g.
+	// `d-*` — and `>` as a multi-level trailing wildcard) to a
+	// fully-qualified protobuf message type. At decode time the
+	// `payload` command matches each message's concrete destination
+	// against these patterns; the most specific match wins. An entry
+	// here takes precedence over the message's application_message_type
+	// header, but is overridden by an explicit --type flag.
 	TopicTypes map[string]string `json:"topic_types"`
 }
 
