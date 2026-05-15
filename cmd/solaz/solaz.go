@@ -150,7 +150,7 @@ func runHeaders(args []string) {
 	fs := flag.NewFlagSet("headers", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
-	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
+	fs.DurationVar(&timeout, "timeout", 60*time.Second, "max time to wait for a single message")
 	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")

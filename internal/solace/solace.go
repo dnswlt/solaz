@@ -303,9 +303,23 @@ func (h *statsHandler) finish() error {
 	for _, t := range names {
 		s := h.topics[t]
 		avg := float64(s.TotalSize) / float64(s.Count)
-		fmt.Fprintf(w, "%s\t%d\t%d\t%.1f\n", t, s.Count, s.TotalSize, avg)
+		fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", t, s.Count, formatBytes(float64(s.TotalSize)), formatBytes(avg))
 	}
 	avg := float64(totalBytes) / float64(totalCount)
-	fmt.Fprintf(w, "TOTAL\t%d\t%d\t%.1f\n", totalCount, totalBytes, avg)
+	fmt.Fprintf(w, "TOTAL\t%d\t%s\t%s\n", totalCount, formatBytes(float64(totalBytes)), formatBytes(avg))
 	return w.Flush()
+}
+
+func formatBytes(b float64) string {
+	if b < 100000 {
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", b), ".0")
+	}
+	const unit = 1024
+	if b < unit*unit {
+		return fmt.Sprintf("%.1f kiB", b/unit)
+	}
+	if b < unit*unit*unit {
+		return fmt.Sprintf("%.1f MiB", b/(unit*unit))
+	}
+	return fmt.Sprintf("%.1f GiB", b/(unit*unit*unit))
 }
