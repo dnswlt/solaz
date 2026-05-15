@@ -1,8 +1,11 @@
 package solace
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,6 +46,52 @@ type Profile struct {
 	// here takes precedence over the message's application_message_type
 	// header, but is overridden by an explicit --type flag.
 	TopicTypes map[string]string `json:"topic_types"`
+}
+
+// LoadVarsFile reads a simple `key=value` file used as a default source of
+// --var template substitutions. Empty lines and lines whose first non-space
+// character is `#` are ignored. Whitespace around the key and value is
+// trimmed. A missing file is not an error — the function returns (nil, nil).
+func LoadVarsFile(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	vars := map[string]string{}
+	scanner := bufio.NewScanner(f)
+	lineno := 0
+	for scanner.Scan() {
+		lineno++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			return nil, fmt.Errorf("%s:%d: missing '=' in line", path, lineno)
+		}
+		k = strings.TrimSpace(k)
+		if k == "" {
+			return nil, fmt.Errorf("%s:%d: empty key", path, lineno)
+		}
+		vars[k] = strings.TrimSpace(v)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return vars, nil
+}
+
+// VarsPath returns the vars-file path that pairs with configPath:
+// it swaps the path's extension for `.vars` (so `foo.conf` → `foo.vars`).
+// If configPath has no extension, `.vars` is appended.
+func VarsPath(configPath string) string {
+	return strings.TrimSuffix(configPath, filepath.Ext(configPath)) + ".vars"
 }
 
 func DefaultConfigPath() string {

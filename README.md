@@ -192,6 +192,23 @@ Expansion happens before validation, so a templated profile with no
 rather than failing later at TLS time. Profiles with no placeholders are
 unaffected.
 
+For frequently-used values, drop them into a companion `vars` file: it
+sits next to the config (default `~/.solaz.vars`, or the `--config` path
+with its extension swapped for `.vars`). Each line is `KEY=VALUE`; blank
+lines and `#`-prefixed lines are ignored. CLI `--var` flags override
+matching keys from the file. Example `~/.solaz.vars`:
+
+```sh
+# default expansion values for ~/.solaz.conf
+namespace = dev-payments-1
+vpn       = payments-dev
+creds     = /home/me/solaz-creds
+```
+
+with that in place, `solaz headers --topic 'foo/>'` works without any
+`--var` flags; you can still override one ad-hoc with
+`--var namespace=qa-payments-1`.
+
 ### Populating the trust store
 
 `trust_store_dir` is a directory of CA certs in OpenSSL hashed-directory

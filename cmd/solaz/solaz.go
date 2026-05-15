@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -98,13 +99,24 @@ func main() {
 	}
 }
 
-// loadProfile resolves a profile from --config / --profile / --var. When
-// validate is true it additionally checks that the connection fields
-// required to reach a broker are populated.
+// loadProfile resolves a profile from --config / --profile / --var. Vars
+// from the companion `.vars` file (default ~/.solaz.vars, or the --config
+// path with its extension swapped) are merged in as a baseline; CLI --var
+// flags override them. When validate is true the connection fields
+// required to reach a broker are also checked.
 func loadProfile(configPath, profileName string, vars map[string]string, validate bool) *solace.Profile {
 	if configPath == "" {
 		configPath = solace.DefaultConfigPath()
 	}
+	varsPath := solace.VarsPath(configPath)
+	fileVars, err := solace.LoadVarsFile(varsPath)
+	if err != nil {
+		fatalf("vars: %v", err)
+	}
+	merged := make(map[string]string)
+	maps.Copy(merged, fileVars)
+	maps.Copy(merged, vars)
+
 	cfg, err := solace.LoadConfig(configPath)
 	if err != nil {
 		fatalf("config: %v", err)
@@ -113,7 +125,7 @@ func loadProfile(configPath, profileName string, vars map[string]string, validat
 	if err != nil {
 		fatalf("profile: %v", err)
 	}
-	if err := solace.ExpandProfile(profile, vars); err != nil {
+	if err := solace.ExpandProfile(profile, merged); err != nil {
 		fatalf("profile %q: %v", profile.Name, err)
 	}
 	if validate {
