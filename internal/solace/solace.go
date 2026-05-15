@@ -25,6 +25,7 @@ type ReceiveOptions struct {
 	MaxRuntime  time.Duration
 	Registry    *ProtoRegistry
 	MessageType string
+	TopicTypes  map[string]string
 	Mode        string
 	Count       int
 }
@@ -112,7 +113,11 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 	case "headers":
 		return &headersHandler{}, nil
 	case "payload":
-		return &printJSONHandler{registry: opts.Registry, messageType: opts.MessageType}, nil
+		return &printJSONHandler{
+			registry:    opts.Registry,
+			messageType: opts.MessageType,
+			topicTypes:  opts.TopicTypes,
+		}, nil
 	case "stats":
 		return &statsHandler{topics: make(map[string]*topicStats)}, nil
 	default:
@@ -188,10 +193,18 @@ func (h *headersHandler) finish() error { return nil }
 type printJSONHandler struct {
 	registry    *ProtoRegistry
 	messageType string
+	topicTypes  map[string]string
 }
 
 func (h *printJSONHandler) handle(msg message.InboundMessage) error {
 	msgType := h.messageType
+	if msgType == "" && len(h.topicTypes) > 0 {
+		mt, err := lookupTopicType(msg.GetDestinationName(), h.topicTypes)
+		if err != nil {
+			return err
+		}
+		msgType = mt
+	}
 	if msgType == "" {
 		if v, ok := msg.GetApplicationMessageType(); ok {
 			msgType = v
@@ -206,7 +219,7 @@ func (h *printJSONHandler) handle(msg message.InboundMessage) error {
 		return fmt.Errorf("no proto registry configured (set proto_paths in profile)")
 	}
 	if msgType == "" {
-		return fmt.Errorf("message type is unknown (use --type to specify explicitly)")
+		return fmt.Errorf("message type is unknown for topic %q (use --type or configure topic_types in the profile)", msg.GetDestinationName())
 	}
 
 	if idx := strings.LastIndex(msgType, "/"); idx >= 0 {

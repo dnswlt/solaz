@@ -33,6 +33,15 @@ type Profile struct {
 	ClientName         string   `json:"client_name"`          // optional client name
 	InsecureSkipVerify bool     `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
 	ProtoPaths         []string `json:"proto_paths"`          // paths to search for .proto files
+
+	// TopicTypes maps a Solace topic subscription pattern (with `*` and
+	// `>` wildcards) to a fully-qualified protobuf message type. At
+	// decode time the `payload` command matches each message's concrete
+	// destination against these patterns; the most specific match wins.
+	// An entry here takes precedence over the message's
+	// application_message_type header, but is overridden by an explicit
+	// --type flag.
+	TopicTypes map[string]string `json:"topic_types"`
 }
 
 func DefaultConfigPath() string {
@@ -115,6 +124,13 @@ func ExpandProfile(p *Profile, vars map[string]string) error {
 	}
 	for i, f := range p.ProtoPaths {
 		p.ProtoPaths[i] = os.Expand(f, mapper)
+	}
+	if len(p.TopicTypes) > 0 {
+		expanded := make(map[string]string, len(p.TopicTypes))
+		for k, v := range p.TopicTypes {
+			expanded[os.Expand(k, mapper)] = os.Expand(v, mapper)
+		}
+		p.TopicTypes = expanded
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing template variables: %s", strings.Join(missing, ", "))

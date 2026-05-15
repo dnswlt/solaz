@@ -127,6 +127,31 @@ Optional fields:
 - `proto_paths` — list of directories searched for `.proto` files used by
   the `payload` command to decode protobuf payloads to JSON. Required for
   `payload` if message payloads are protobuf-encoded.
+- `topic_types` — map from a Solace topic subscription pattern (with
+  `*` matching one level and `>` matching one or more trailing levels)
+  to a fully-qualified protobuf message type. When `--type` is not set,
+  the `payload` command matches each message's concrete destination
+  against these patterns to pick a type; the most specific match wins
+  (more literal segments first, then more segments overall), and an
+  unresolvable tie produces a per-message error. This lets a single run
+  subscribe to several topics that carry different types:
+
+  ```sh
+  solaz payload --topic 'trades/orders/>' --topic 'trades/fills/>'
+  ```
+
+  with the profile:
+
+  ```json
+  "topic_types": {
+    "trades/orders/>": "com.example.Order",
+    "trades/fills/>":  "com.example.Fill"
+  }
+  ```
+
+  A `topic_types` match takes precedence over the message's
+  `application_message_type` header. `--type`, when set, overrides
+  everything.
 
 ### Templated profiles
 

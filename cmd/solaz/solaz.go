@@ -210,6 +210,7 @@ func runPayload(args []string) {
 		MaxRuntime:  maxRuntime,
 		Registry:    registry,
 		MessageType: msgType,
+		TopicTypes:  profile.TopicTypes,
 		Mode:        "payload",
 		Count:       count,
 	})
