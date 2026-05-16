@@ -1,4 +1,4 @@
-module github.com/dnswlt/hackz/solaz
+module github.com/dnswlt/solaz
 
 go 1.25.0
 

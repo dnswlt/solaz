@@ -1,11 +1,9 @@
-package solace_test
+package solace
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/dnswlt/hackz/solaz/internal/solace"
 )
 
 func TestNewProtoRegistry(t *testing.T) {
@@ -60,7 +58,7 @@ message IntervalMessage {
 	}
 
 	// Instantiate the registry
-	reg, err := solace.NewProtoRegistry([]string{tmpDir})
+	reg, err := NewProtoRegistry([]string{tmpDir})
 	if err != nil {
 		t.Fatalf("NewProtoRegistry failed: %v", err)
 	}

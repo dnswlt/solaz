@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dnswlt/hackz/solaz/internal/solace"
+	"github.com/dnswlt/solaz/internal/solace"
+	"github.com/dnswlt/solaz/internal/trace"
 )
 
 const usage = `Usage: %s <command> [flags]
@@ -133,6 +134,7 @@ func loadProfile(configPath, profileName string, vars map[string]string, validat
 			fatalf("profile: %v", err)
 		}
 	}
+	trace.Debugf("loaded profile %q from %s (%d vars)", profile.Name, configPath, len(merged))
 	return profile
 }
 
@@ -144,8 +146,7 @@ func runReceive(profile *solace.Profile, opts solace.ReceiveOptions) {
 		fatalf("build messaging service: %v", err)
 	}
 
-	// fmt.Fprintf(os.Stderr, "[%s] subscribed to %q on %s/%s. Waiting up to %s for messages...\n",
-	// 	profile.Name, strings.Join(opts.Topics, ","), profile.Host, profile.VPN, opts.Timeout)
+	trace.Debugf("connecting to %s/%s", profile.Host, profile.VPN)
 
 	if err := solace.Run(svc, opts); err != nil {
 		fatalf("%v", err)
@@ -156,6 +157,7 @@ func runHeaders(args []string) {
 	var (
 		configPath, profileName string
 		timeout, maxRuntime     time.Duration
+		verbose                 bool
 		vars                    = &varsFlag{}
 		topics                  topicsFlag
 	)
@@ -164,9 +166,12 @@ func runHeaders(args []string) {
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
 	fs.DurationVar(&timeout, "timeout", 60*time.Second, "max time to wait for a single message")
 	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
+	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
+	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
 	fs.Parse(args)
+	trace.SetVerbose(verbose)
 
 	if len(topics) == 0 {
 		fatalf("--topic is required")
@@ -188,6 +193,7 @@ func runPayload(args []string) {
 		timeout, maxRuntime     time.Duration
 		msgType                 string
 		count                   int
+		verbose                 bool
 		vars                    = &varsFlag{}
 		topics                  topicsFlag
 	)
@@ -198,9 +204,12 @@ func runPayload(args []string) {
 	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
 	fs.StringVar(&msgType, "type", "", "protobuf message type to use for decoding")
 	fs.IntVar(&count, "count", 1, "number of messages to print")
+	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
+	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
 	fs.Parse(args)
+	trace.SetVerbose(verbose)
 
 	if len(topics) == 0 {
 		fatalf("--topic is required")
@@ -233,6 +242,7 @@ func runStats(args []string) {
 		configPath, profileName string
 		timeout, maxRuntime     time.Duration
 		count                   int
+		verbose                 bool
 		vars                    = &varsFlag{}
 		topics                  topicsFlag
 	)
@@ -242,9 +252,12 @@ func runStats(args []string) {
 	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
 	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
 	fs.IntVar(&count, "count", 100, "number of messages to aggregate")
+	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
+	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
 	fs.Parse(args)
+	trace.SetVerbose(verbose)
 
 	if len(topics) == 0 {
 		fatalf("--topic is required")
@@ -265,13 +278,17 @@ func runStats(args []string) {
 func runTypes(args []string) {
 	var (
 		configPath, profileName string
+		verbose                 bool
 		vars                    = &varsFlag{}
 	)
 	fs := flag.NewFlagSet("types", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
+	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
+	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Parse(args)
+	trace.SetVerbose(verbose)
 
 	profile := loadProfile(configPath, profileName, vars.m, false)
 	if len(profile.ProtoPaths) == 0 {

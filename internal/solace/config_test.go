@@ -1,17 +1,15 @@
-package solace_test
+package solace
 
 import (
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
-
-	"github.com/dnswlt/hackz/solaz/internal/solace"
 )
 
 func TestLoadVarsFile(t *testing.T) {
 	t.Run("missing file is not an error", func(t *testing.T) {
-		v, err := solace.LoadVarsFile(filepath.Join(t.TempDir(), "does-not-exist.vars"))
+		v, err := LoadVarsFile(filepath.Join(t.TempDir(), "does-not-exist.vars"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -33,7 +31,7 @@ token=k=v=both
 		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		got, err := solace.LoadVarsFile(path)
+		got, err := LoadVarsFile(path)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -53,7 +51,7 @@ token=k=v=both
 		if err := os.WriteFile(path, []byte("namespace dev\n"), 0644); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		if _, err := solace.LoadVarsFile(path); err == nil {
+		if _, err := LoadVarsFile(path); err == nil {
 			t.Error("expected error, got nil")
 		}
 	})
@@ -63,7 +61,7 @@ token=k=v=both
 		if err := os.WriteFile(path, []byte("=value\n"), 0644); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		if _, err := solace.LoadVarsFile(path); err == nil {
+		if _, err := LoadVarsFile(path); err == nil {
 			t.Error("expected error, got nil")
 		}
 	})
@@ -80,7 +78,7 @@ func TestDefaultVarsPath(t *testing.T) {
 		{".solaz.conf", ".solaz.vars"},
 	}
 	for _, tc := range cases {
-		if got := solace.VarsPath(tc.config); got != tc.want {
+		if got := VarsPath(tc.config); got != tc.want {
 			t.Errorf("DefaultVarsPath(%q) = %q, want %q", tc.config, got, tc.want)
 		}
 	}

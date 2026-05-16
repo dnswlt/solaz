@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/dnswlt/solaz/internal/trace"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -41,10 +42,13 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 	if err := svc.Connect(); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
+	trace.Debugf("connected")
 	defer func() {
 		if err := svc.Disconnect(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: disconnect: %v\n", err)
+			trace.Warningf("disconnect: %v", err)
+			return
 		}
+		trace.Debugf("disconnected")
 	}()
 
 	subs := make([]resource.Subscription, len(opts.Topics))
@@ -61,11 +65,13 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 	if err := receiver.Start(); err != nil {
 		return fmt.Errorf("start receiver: %w", err)
 	}
+	trace.Debugf("subscribed to %s; awaiting up to %d messages (per-msg timeout=%s, max-runtime=%s)",
+		strings.Join(opts.Topics, ","), opts.Count, opts.Timeout, opts.MaxRuntime)
 	defer func() {
 		err := receiver.Terminate(1 * time.Second)
 		var incomplete *solace.IncompleteMessageDeliveryError
 		if err != nil && !errors.As(err, &incomplete) {
-			fmt.Fprintf(os.Stderr, "warning: terminate receiver: %v\n", err)
+			trace.Warningf("terminate receiver: %v", err)
 		}
 	}()
 
@@ -74,6 +80,7 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 		deadline = time.Now().Add(opts.MaxRuntime)
 	}
 
+	var received, warnings int
 	for i := 0; i < opts.Count; i++ {
 		timeout := opts.Timeout
 		if !deadline.IsZero() {
@@ -93,10 +100,14 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 			}
 			return fmt.Errorf("receive: %w", err)
 		}
+		received++
 		if err := handler.handle(msg); err != nil {
-			return err
+			trace.Warningf("%s: %v", msg.GetDestinationName(), err)
+			warnings++
+			continue
 		}
 	}
+	trace.Debugf("done: received=%d warnings=%d", received, warnings)
 
 	return handler.finish()
 }
