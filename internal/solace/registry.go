@@ -148,9 +148,9 @@ func (r *globalFallbackResolver) FindFileByPath(path string) (protocompile.Searc
 	return res, err
 }
 
-// IdentifyMessage attempts to find the most likely message types for a raw payload
+// InferMessageType attempts to find the most likely message types for a raw payload
 // by scoring the unmarshaled structure against all known descriptors.
-func (r *ProtoRegistry) IdentifyMessage(payload []byte) ([]string, error) {
+func (r *ProtoRegistry) InferMessageType(payload []byte) ([]string, error) {
 	if len(payload) == 0 {
 		return nil, errors.New("empty payload perfectly matches all messages")
 	}

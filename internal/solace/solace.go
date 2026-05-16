@@ -35,7 +35,7 @@ type ReceiveOptions struct {
 	Count       int
 	Raw         bool // payload mode: emit raw bytes, skip content-type dispatch
 	Envelope    bool // payload mode: emit {headers, payload, ...} JSON envelope
-	Identify    bool // payload mode: heuristically identify proto type when unknown
+	InferType   bool // payload mode: heuristically infer proto type when unknown
 }
 
 // Run connects to the messaging service, subscribes to the configured topics,
@@ -137,7 +137,7 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 			topicIndex:  newTopicTypeIndex(opts.TopicTypes),
 			raw:         opts.Raw,
 			envelope:    opts.Envelope,
-			identify:    opts.Identify,
+			inferType:   opts.InferType,
 		}, nil
 	case "stats":
 		return &statsHandler{topics: make(map[string]*topicStats)}, nil
@@ -217,7 +217,7 @@ type payloadHandler struct {
 	topicIndex  *topicTypeIndex
 	raw         bool
 	envelope    bool
-	identify    bool
+	inferType   bool
 }
 
 // envelope is the JSON record emitted in --envelope mode. The Payload
@@ -274,7 +274,7 @@ func (h *payloadHandler) decode(msg message.InboundMessage, payload []byte, ct s
 	if err != nil {
 		return nil, err
 	}
-	if hasHint || isProtobufContentType(ct) || h.identify {
+	if hasHint || isProtobufContentType(ct) {
 		return h.decodeProto(msg, payload, msgType)
 	}
 	return nil, nil
@@ -324,22 +324,22 @@ func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte,
 		return nil, fmt.Errorf("no proto registry configured (set proto_paths in profile)")
 	}
 	if msgType == "" {
-		if !h.identify {
-			return nil, fmt.Errorf("message type is unknown for topic %q (use --type, --identify, or configure topic_types in the profile)", msg.GetDestinationName())
+		if !h.inferType {
+			return nil, fmt.Errorf("message type is unknown for topic %q (use --type, --infer, or configure topic_types in the profile)", msg.GetDestinationName())
 		}
 		started := time.Now()
-		candidates, err := h.registry.IdentifyMessage(payload)
+		candidates, err := h.registry.InferMessageType(payload)
 		if err != nil {
-			return nil, fmt.Errorf("identify message: %w", err)
+			return nil, fmt.Errorf("infer message: %w", err)
 		}
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("could not identify message type for topic %q", msg.GetDestinationName())
+			return nil, fmt.Errorf("could not infer message type for topic %q", msg.GetDestinationName())
 		}
 		if len(candidates) > 1 {
-			return nil, fmt.Errorf("ambiguous message identification for topic %q: %s", msg.GetDestinationName(), strings.Join(candidates, ", "))
+			return nil, fmt.Errorf("ambiguous message types for topic %q: %s", msg.GetDestinationName(), strings.Join(candidates, ", "))
 		}
 		msgType = candidates[0]
-		trace.Debugf("identified %s as %s in %d ms", msg.GetDestinationName(), msgType, time.Since(started).Milliseconds())
+		trace.Debugf("inferred %s as %s in %d ms", msg.GetDestinationName(), msgType, time.Since(started).Milliseconds())
 	}
 
 	if idx := strings.LastIndex(msgType, "/"); idx >= 0 {

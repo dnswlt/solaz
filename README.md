@@ -57,7 +57,7 @@ Per-command flags:
   (mutually exclusive with `--type`).
   `--envelope` — emit one `{headers, payload, payloadEncoding, ...}` JSON
   object per message (see [Envelope mode](#envelope-mode)).
-  `--identify` — heuristically identify the protobuf message type when
+  `--infer` — heuristically infer the protobuf message type when
   no other hint resolves one.
 - `stats`: `--count N` (default `100`) — number of messages to aggregate.
 

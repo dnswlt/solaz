@@ -189,13 +189,13 @@ func runHeaders(args []string) {
 
 func runPayload(args []string) {
 	var (
-		configPath, profileName          string
-		timeout, maxRuntime              time.Duration
-		msgType                          string
-		count                            int
-		verbose, raw, envelope, identify bool
-		vars                             = &varsFlag{}
-		topics, protoPaths               stringListFlag
+		configPath, profileName       string
+		timeout, maxRuntime           time.Duration
+		msgType                       string
+		count                         int
+		verbose, raw, envelope, infer bool
+		vars                          = &varsFlag{}
+		topics, protoPaths            stringListFlag
 	)
 	fs := flag.NewFlagSet("payload", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
@@ -206,7 +206,7 @@ func runPayload(args []string) {
 	fs.IntVar(&count, "count", 1, "number of messages to print")
 	fs.BoolVar(&raw, "raw", false, "write payloads to stdout as raw bytes, bypassing content-type decoding")
 	fs.BoolVar(&envelope, "envelope", false, "emit {headers, payload, payloadEncoding, ...} JSON envelopes; every message produces one record")
-	fs.BoolVar(&identify, "identify", false, "heuristically identify the protobuf message type when no --type, topic_types, or application_message_type is set")
+	fs.BoolVar(&infer, "infer", false, "heuristically infer the protobuf message type when no --type, topic_types, or application_message_type is set")
 	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
@@ -221,17 +221,17 @@ func runPayload(args []string) {
 	if raw && msgType != "" {
 		fatalf("--raw and --type are mutually exclusive")
 	}
-	if identify && raw {
-		fatalf("--identify and --raw are mutually exclusive")
+	if infer && raw {
+		fatalf("--infer and --raw are mutually exclusive")
 	}
-	if identify && msgType != "" {
-		fatalf("--identify and --type are mutually exclusive")
+	if infer && msgType != "" {
+		fatalf("--infer and --type are mutually exclusive")
 	}
 	profile := loadProfile(configPath, profileName, vars.m, true)
 	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
 
-	if identify && len(profile.ProtoPaths) == 0 {
-		fatalf("--identify requires proto_paths (in the profile) or --proto-path")
+	if infer && len(profile.ProtoPaths) == 0 {
+		fatalf("--infer requires proto_paths (in the profile) or --proto-path")
 	}
 
 	var registry *solace.ProtoRegistry
@@ -254,7 +254,7 @@ func runPayload(args []string) {
 		Count:       count,
 		Raw:         raw,
 		Envelope:    envelope,
-		Identify:    identify,
+		InferType:   infer,
 	})
 }
 
