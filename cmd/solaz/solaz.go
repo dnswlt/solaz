@@ -27,18 +27,18 @@ func fatalf(format string, a ...any) {
 	os.Exit(1)
 }
 
-// topicsFlag collects repeated --topic flags into a slice.
-type topicsFlag []string
+// stringListFlag collects repeated flags into a slice.
+type stringListFlag []string
 
-func (t *topicsFlag) String() string {
-	if t == nil {
+func (s *stringListFlag) String() string {
+	if s == nil {
 		return ""
 	}
-	return strings.Join(*t, ",")
+	return strings.Join(*s, ",")
 }
 
-func (t *topicsFlag) Set(s string) error {
-	*t = append(*t, s)
+func (s *stringListFlag) Set(val string) error {
+	*s = append(*s, val)
 	return nil
 }
 
@@ -159,7 +159,7 @@ func runHeaders(args []string) {
 		timeout, maxRuntime     time.Duration
 		verbose                 bool
 		vars                    = &varsFlag{}
-		topics                  topicsFlag
+		topics                  stringListFlag
 	)
 	fs := flag.NewFlagSet("headers", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
@@ -195,7 +195,7 @@ func runPayload(args []string) {
 		count                   int
 		verbose, raw, envelope  bool
 		vars                    = &varsFlag{}
-		topics                  topicsFlag
+		topics, protoPaths      stringListFlag
 	)
 	fs := flag.NewFlagSet("payload", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
@@ -210,6 +210,7 @@ func runPayload(args []string) {
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
+	fs.Var(&protoPaths, "proto-path", "additional path to search for .proto files (may be repeated)")
 	fs.Parse(args)
 	trace.SetVerbose(verbose)
 
@@ -220,6 +221,7 @@ func runPayload(args []string) {
 		fatalf("--raw and --type are mutually exclusive")
 	}
 	profile := loadProfile(configPath, profileName, vars.m, true)
+	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
 
 	var registry *solace.ProtoRegistry
 	if !raw && len(profile.ProtoPaths) > 0 {
@@ -251,7 +253,7 @@ func runStats(args []string) {
 		count                   int
 		verbose                 bool
 		vars                    = &varsFlag{}
-		topics                  topicsFlag
+		topics                  stringListFlag
 	)
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
@@ -287,6 +289,7 @@ func runTypes(args []string) {
 		configPath, profileName string
 		verbose                 bool
 		vars                    = &varsFlag{}
+		protoPaths              stringListFlag
 	)
 	fs := flag.NewFlagSet("types", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
@@ -294,12 +297,15 @@ func runTypes(args []string) {
 	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
+	fs.Var(&protoPaths, "proto-path", "additional path to search for .proto files (may be repeated)")
 	fs.Parse(args)
 	trace.SetVerbose(verbose)
 
 	profile := loadProfile(configPath, profileName, vars.m, false)
+	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
+
 	if len(profile.ProtoPaths) == 0 {
-		fatalf("profile %q has no proto_paths configured", profile.Name)
+		fatalf("profile %q has no proto_paths configured and no --proto-path provided", profile.Name)
 	}
 	registry, err := solace.NewProtoRegistry(profile.ProtoPaths)
 	if err != nil {
