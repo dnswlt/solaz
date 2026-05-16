@@ -18,7 +18,7 @@ about *how* the code should be shaped, not *what* it does.
 - [cmd/solaz/solaz.go](cmd/solaz/solaz.go) — entrypoint, flag parsing, one
   `run<Command>` per subcommand. Thin glue; real work lives in `internal/`.
 - [internal/solace/solace.go](internal/solace/solace.go) — receive loop,
-  per-mode `messageHandler` implementations (`headers`, `payload`, `stats`).
+  per-mode `messageHandler` implementations (`headers`, `print`, `stats`).
 - [internal/solace/config.go](internal/solace/config.go) — config/profile
   loading, `${var}` expansion, `.vars` companion file, broker service build.
 - [internal/solace/registry.go](internal/solace/registry.go) — protobuf
@@ -55,7 +55,7 @@ These are the non-negotiables. New code and refactors should reinforce them.
 Subcommands fall into two categories:
 
 - **Pipeable** (machine-readable, one record per message, no decoration):
-  `payload` emits single-line JSON for known content types (JSON,
+  `print` emits single-line JSON for known content types (JSON,
   protobuf) and raw payload bytes for everything else; `types` emits one
   FQ name per line. These must stay `jq`/`grep`/`awk`-friendly (or
   whatever decoder fits the payload). No headers, no summary lines, no
@@ -136,7 +136,7 @@ principle 2). Raw `fmt.Fprintf(os.Stderr, ...)` should not appear outside
   (`*` as prefix-within-level, `>` only at the end) are subtle and covered
   by [internal/solace/topic_match_test.go](internal/solace/topic_match_test.go).
 - **Proto registry**: lazy — only build it when a command actually needs it
-  (`payload`, `types`). `headers` and `stats` must work without
+  (`print`, `types`). `headers` and `stats` must work without
   `proto_paths` configured.
 - **No new dependencies** without a good reason. The current set (Solace
   SDK, `protobuf`, `protocompile`, `genproto/googleapis/type/*`) is

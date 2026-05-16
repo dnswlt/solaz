@@ -17,7 +17,7 @@ const usage = `Usage: %s <command> [flags]
 
 Commands:
   headers   Print message headers and payload size
-  payload   Print message payloads as single-line JSON
+  print     Print message payloads as single-line JSON
   stats     Aggregate metrics across messages
   types     List protobuf message types known to the proto registry
 `
@@ -89,14 +89,14 @@ func main() {
 	switch cmd {
 	case "headers":
 		runHeaders(args)
-	case "payload":
-		runPayload(args)
+	case "print":
+		runPrint(args)
 	case "stats":
 		runStats(args)
 	case "types":
 		runTypes(args)
 	default:
-		fatalf("unknown command %q (expected 'headers', 'payload', 'stats', or 'types')", cmd)
+		fatalf("unknown command %q (expected 'headers', 'print', 'stats', or 'types')", cmd)
 	}
 }
 
@@ -187,7 +187,7 @@ func runHeaders(args []string) {
 	})
 }
 
-func runPayload(args []string) {
+func runPrint(args []string) {
 	var (
 		configPath, profileName       string
 		timeout, maxRuntime           time.Duration
@@ -197,7 +197,7 @@ func runPayload(args []string) {
 		vars                          = &varsFlag{}
 		topics, protoPaths            stringListFlag
 	)
-	fs := flag.NewFlagSet("payload", flag.ExitOnError)
+	fs := flag.NewFlagSet("print", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
 	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
@@ -250,7 +250,7 @@ func runPayload(args []string) {
 		Registry:    registry,
 		MessageType: msgType,
 		TopicTypes:  profile.TopicTypes,
-		Mode:        "payload",
+		Mode:        "print",
 		Count:       count,
 		Raw:         raw,
 		Envelope:    envelope,

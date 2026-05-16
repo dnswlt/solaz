@@ -11,7 +11,7 @@ solaz <command> [flags]
 ### Commands
 
 - `headers` — print message headers and payload byte size for each received message.
-- `payload` — print message payloads, one record per message, dispatched
+- `print` — print message payloads, one record per message, dispatched
   on the message's `Content-Type` (and explicit overrides):
   - `--raw` set → write raw payload bytes to stdout unchanged, bypassing
     content-type dispatch.
@@ -47,12 +47,12 @@ Flags common to all commands:
 - `--max-runtime DUR` — max total time spent receiving; `0` disables
   (default `0`).
 - `--var KEY=VALUE` — template variable for profile expansion (repeatable).
-- `--type FQNAME` — protobuf message type for `payload`; overrides the
+- `--type FQNAME` — protobuf message type for `print`; overrides the
   per-message hint.
 
 Per-command flags:
 
-- `payload`: `--count N` (default `1`) — number of messages to print.
+- `print`: `--count N` (default `1`) — number of messages to print.
   `--raw` — emit raw payload bytes, bypassing content-type dispatch
   (mutually exclusive with `--type`).
   `--envelope` — emit one `{headers, payload, payloadEncoding, ...}` JSON
@@ -74,13 +74,13 @@ solaz headers --topic 'foo/>'
 solaz stats --topic 'foo/>' --count 1000 --max-runtime 2m
 
 # Print 5 payloads as JSON, forcing a specific proto type
-solaz payload --topic 'a/b/*' --count 5 --type com.example.MyMessage
+solaz print --topic 'a/b/*' --count 5 --type com.example.MyMessage
 
 # Subscribe to multiple topics at once
 solaz stats --topic 'foo/>' --topic 'bar/baz/*'
 
 # Use a named profile and a longer custom receive timeout
-solaz payload --topic 'x/>' --profile prod --timeout 1m
+solaz print --topic 'x/>' --profile prod --timeout 1m
 
 # List every protobuf message type the registry knows about
 solaz types --profile prod
@@ -94,7 +94,7 @@ disconnects when done.
 
 ### Envelope mode
 
-With `--envelope`, the `payload` command emits one JSON object per message
+With `--envelope`, the `print` command emits one JSON object per message
 that wraps the headers and the payload together. Every message produces a
 record — payloads that can't be decoded are base64-encoded rather than
 dropped — so the output stream is safe to feed straight into `jq` or a log
@@ -134,10 +134,10 @@ Schema:
 
 ```sh
 # Tail 100 orders with headers, pretty-printed
-solaz payload --envelope --topic 'trades/orders/>' --count 100 | jq .
+solaz print --envelope --topic 'trades/orders/>' --count 100 | jq .
 
 # Pull just the destinations + sequence numbers
-solaz payload --envelope --topic 'foo/>' --count 50 \
+solaz print --envelope --topic 'foo/>' --count 50 \
   | jq -r '[.headers.Destination, .headers.SequenceNumber] | @tsv'
 ```
 
@@ -194,21 +194,21 @@ Optional fields:
 - `insecure_skip_verify` — dev-only. Disables broker certificate
   validation (chain *and* hostname). Prints a warning to stderr.
 - `proto_paths` — list of directories searched for `.proto` files used by
-  the `payload` command to decode protobuf payloads to JSON. Required for
-  `payload` if message payloads are protobuf-encoded.
+  the `print` command to decode protobuf payloads to JSON. Required for
+  `print` if message payloads are protobuf-encoded.
 - `topic_types` — map from a Solace topic subscription pattern (with
   `*` matching one level, `*` as a suffix to a level part acting as a
   prefix wildcard within that level — e.g. `d-*` matches `d-anything` —
   and `>` matching one or more trailing levels) to a fully-qualified
   protobuf message type. When `--type` is not set,
-  the `payload` command matches each message's concrete destination
+  the `print` command matches each message's concrete destination
   against these patterns to pick a type; the most specific match wins
   (more literal segments first, then more segments overall), and an
   unresolvable tie produces a per-message error. This lets a single run
   subscribe to several topics that carry different types:
 
   ```sh
-  solaz payload --topic 'trades/orders/>' --topic 'trades/fills/>'
+  solaz print --topic 'trades/orders/>' --topic 'trades/fills/>'
   ```
 
   with the profile:

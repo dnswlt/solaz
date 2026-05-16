@@ -33,9 +33,9 @@ type ReceiveOptions struct {
 	TopicTypes  map[string]string
 	Mode        string
 	Count       int
-	Raw         bool // payload mode: emit raw bytes, skip content-type dispatch
-	Envelope    bool // payload mode: emit {headers, payload, ...} JSON envelope
-	InferType   bool // payload mode: heuristically infer proto type when unknown
+	Raw         bool // print mode: emit raw bytes, skip content-type dispatch
+	Envelope    bool // print mode: emit {headers, payload, ...} JSON envelope
+	InferType   bool // print mode: heuristically infer proto type when unknown
 }
 
 // Run connects to the messaging service, subscribes to the configured topics,
@@ -130,7 +130,7 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 	switch opts.Mode {
 	case "headers":
 		return &headersHandler{}, nil
-	case "payload":
+	case "print":
 		return &payloadHandler{
 			registry:    opts.Registry,
 			messageType: opts.MessageType,
@@ -251,7 +251,7 @@ func (h *payloadHandler) handle(msg message.InboundMessage) error {
 		fmt.Println(string(value))
 		return nil
 	}
-	trace.Debugf("payload: raw output (%d bytes, content-type=%q)", len(payload), ct)
+	trace.Debugf("print: raw output (%d bytes, content-type=%q)", len(payload), ct)
 	_, err := os.Stdout.Write(payload)
 	return err
 }

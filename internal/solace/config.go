@@ -41,7 +41,7 @@ type Profile struct {
 	// a single-level wildcard or a prefix wildcard within a level — e.g.
 	// `d-*` — and `>` as a multi-level trailing wildcard) to a
 	// fully-qualified protobuf message type. At decode time the
-	// `payload` command matches each message's concrete destination
+	// `print` command matches each message's concrete destination
 	// against these patterns; the most specific match wins. An entry
 	// here takes precedence over the message's application_message_type
 	// header, but is overridden by an explicit --type flag.
