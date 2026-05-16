@@ -191,22 +191,26 @@ func (r *ProtoRegistry) InferMessageType(payload []byte) ([]string, error) {
 // between valid payloads and accidental wire-type collisions.
 //
 // Scoring rules:
-//   - Disqualification (-1): Message contains unknown fields, zero populated
-//     fields, or invalid UTF-8 sequences in any string field.
-//   - Base Score (+1): Awarded for any successfully populated field.
+//   - Disqualification (-1): Message (or any sub-message) contains unknown
+//     fields or invalid UTF-8 sequences in any string field.
+//   - Base Score (+1): Awarded for any populated field.
 //   - Enum Bonus (+2): Awarded if an integer maps to a known enum value,
 //     providing a strong type-safety signal.
 //   - Nesting Multiplier (*2): Sub-messages are scored recursively and multiplied
 //     to heavily favor deep structural alignment over flat byte arrays.
 //
-// Returns a positive integer score, or -1 if the message is disqualified.
+// A sub-message with no populated fields (e.g. an empty google.protobuf.Timestamp
+// set on the wire) is not disqualifying — it scores 0 and the parent still gets
+// its +1 for the field being present.
+//
+// Returns a non-negative score, or -1 if the message is disqualified.
 func scoreMessage(msg protoreflect.Message) int {
 	if len(msg.GetUnknown()) > 0 {
 		return -1
 	}
 
 	score := 0
-	invalidUTF8 := false
+	invalid := false
 
 	msg.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
 		score += 1
@@ -218,7 +222,7 @@ func scoreMessage(msg protoreflect.Message) int {
 				for i := 0; i < list.Len(); i++ {
 					subScore := scoreMessage(list.Get(i).Message())
 					if subScore < 0 {
-						invalidUTF8 = true
+						invalid = true
 						return false
 					}
 					score += subScore * 2
@@ -226,7 +230,7 @@ func scoreMessage(msg protoreflect.Message) int {
 			} else {
 				subScore := scoreMessage(val.Message())
 				if subScore < 0 {
-					invalidUTF8 = true
+					invalid = true
 					return false
 				}
 				score += subScore * 2
@@ -237,13 +241,13 @@ func scoreMessage(msg protoreflect.Message) int {
 				list := val.List()
 				for i := 0; i < list.Len(); i++ {
 					if !utf8.ValidString(list.Get(i).String()) {
-						invalidUTF8 = true
+						invalid = true
 						return false
 					}
 				}
 			} else {
 				if !utf8.ValidString(val.String()) {
-					invalidUTF8 = true
+					invalid = true
 					return false
 				}
 			}
@@ -257,11 +261,7 @@ func scoreMessage(msg protoreflect.Message) int {
 		return true
 	})
 
-	if invalidUTF8 {
-		return -1
-	}
-
-	if score == 0 {
+	if invalid {
 		return -1
 	}
 
