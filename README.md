@@ -123,6 +123,8 @@ Schema:
   protobuf decode), or a base64-encoded string of the raw bytes.
 - `payloadEncoding` — `"json"` or `"base64"`, so consumers don't have to
   guess.
+- `payloadType` — fully-qualified protobuf message type used for
+  decoding; omitted for JSON or raw payloads.
 - `payloadError` — only present when a decode was attempted and failed
   (e.g. `--type` set but the descriptor is missing); the original bytes
   are still available under `payload` as base64.

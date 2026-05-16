@@ -224,20 +224,23 @@ type payloadHandler struct {
 // field is either a json.RawMessage (when the payload was successfully
 // decoded as JSON or protobuf) or a base64-encoded string (raw bytes or
 // failed decode). PayloadEncoding tells the consumer which it got.
+// PayloadType is the fully-qualified protobuf message type used for
+// decoding; empty for JSON or raw payloads.
 type envelope struct {
 	Headers         map[string]any `json:"headers"`
 	Payload         any            `json:"payload"`
 	PayloadEncoding string         `json:"payloadEncoding"`
+	PayloadType     string         `json:"payloadType,omitempty"`
 	PayloadError    string         `json:"payloadError,omitempty"`
 }
 
 func (h *payloadHandler) handle(msg message.InboundMessage) error {
 	payload, _ := msg.GetPayloadAsBytes()
 	ct, _ := msg.GetHTTPContentType()
-	value, decodeErr := h.decode(msg, payload, ct)
+	value, protoType, decodeErr := h.decode(msg, payload, ct)
 
 	if h.envelope {
-		return h.emitEnvelope(msg, payload, value, decodeErr)
+		return h.emitEnvelope(msg, payload, value, protoType, decodeErr)
 	}
 
 	// Non-envelope: an attempted-but-failed decode is a per-message warning.
@@ -254,30 +257,34 @@ func (h *payloadHandler) handle(msg message.InboundMessage) error {
 }
 
 // decode runs the content-type / hint dispatch and returns:
-//   - (jsonValue, nil) when the payload was successfully decoded to JSON;
-//   - (nil, err)       when a decode was attempted and failed;
-//   - (nil, nil)       when no decode was attempted (--raw or unknown
+//   - (jsonValue, protoType, nil) when the payload was successfully decoded.
+//     protoType is the fully-qualified proto message type used; empty for
+//     JSON payloads.
+//   - (nil, protoType, err) when a decode was attempted and failed.
+//     protoType is set when a proto type was resolved before the failure.
+//   - (nil, "", nil) when no decode was attempted (--raw or unknown
 //     format with no proto hint).
-func (h *payloadHandler) decode(msg message.InboundMessage, payload []byte, ct string) (json.RawMessage, error) {
+func (h *payloadHandler) decode(msg message.InboundMessage, payload []byte, ct string) (json.RawMessage, string, error) {
 	if h.raw {
 		// --raw is an explicit override — bypass content-type dispatch.
-		return nil, nil
+		return nil, "", nil
 	}
 	if h.messageType != "" {
 		// --type is an explicit override — always decode as protobuf.
 		return h.decodeProto(msg, payload, h.messageType)
 	}
 	if isJSONContentType(ct) {
-		return compactJSON(payload, ct)
+		v, err := compactJSON(payload, ct)
+		return v, "", err
 	}
 	msgType, hasHint, err := h.resolveProtoHint(msg)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if hasHint || isProtobufContentType(ct) {
+	if hasHint || isProtobufContentType(ct) || h.inferType {
 		return h.decodeProto(msg, payload, msgType)
 	}
-	return nil, nil
+	return nil, "", nil
 }
 
 // resolveProtoHint reports whether the message carries any signal that
@@ -315,28 +322,31 @@ func compactJSON(payload []byte, ct string) (json.RawMessage, error) {
 }
 
 // decodeProto unmarshals payload using the named protobuf type and
-// returns the result as single-line JSON. msgType must already be
-// resolved by the caller (`--type`, content-type dispatch, or
-// resolveProtoHint); an empty msgType yields a clear "unknown type"
-// error so every caller routes through this single function.
-func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte, msgType string) (json.RawMessage, error) {
+// returns the result as single-line JSON along with the resolved type
+// name. msgType must already be resolved by the caller (`--type`,
+// content-type dispatch, or resolveProtoHint); an empty msgType yields
+// a clear "unknown type" error so every caller routes through this
+// single function. The returned type is set whenever a type was
+// resolved — including failure paths after resolution — so callers
+// (the envelope writer in particular) can record which type was used.
+func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte, msgType string) (json.RawMessage, string, error) {
 	if h.registry == nil {
-		return nil, fmt.Errorf("no proto registry configured (set proto_paths in profile)")
+		return nil, "", fmt.Errorf("no proto registry configured (set proto_paths in profile)")
 	}
 	if msgType == "" {
 		if !h.inferType {
-			return nil, fmt.Errorf("message type is unknown for topic %q (use --type, --infer, or configure topic_types in the profile)", msg.GetDestinationName())
+			return nil, "", fmt.Errorf("message type is unknown for topic %q (use --type, --infer, or configure topic_types in the profile)", msg.GetDestinationName())
 		}
 		started := time.Now()
 		candidates, err := h.registry.InferMessageType(payload)
 		if err != nil {
-			return nil, fmt.Errorf("infer message: %w", err)
+			return nil, "", fmt.Errorf("infer message: %w", err)
 		}
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("could not infer message type for topic %q", msg.GetDestinationName())
+			return nil, "", fmt.Errorf("could not infer message type for topic %q", msg.GetDestinationName())
 		}
 		if len(candidates) > 1 {
-			return nil, fmt.Errorf("ambiguous message types for topic %q: %s", msg.GetDestinationName(), strings.Join(candidates, ", "))
+			return nil, "", fmt.Errorf("ambiguous message types for topic %q: %s", msg.GetDestinationName(), strings.Join(candidates, ", "))
 		}
 		msgType = candidates[0]
 		trace.Debugf("inferred %s as %s in %d ms", msg.GetDestinationName(), msgType, time.Since(started).Milliseconds())
@@ -348,27 +358,32 @@ func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte,
 
 	desc, err := h.registry.FindMessage(msgType)
 	if err != nil {
-		return nil, fmt.Errorf("message descriptor not found for %s: %w", msgType, err)
+		return nil, msgType, fmt.Errorf("message descriptor not found for %s: %w", msgType, err)
 	}
 
 	dynMsg := dynamicpb.NewMessage(desc)
 	if err := proto.Unmarshal(payload, dynMsg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal protobuf: %w", err)
+		return nil, msgType, fmt.Errorf("failed to unmarshal protobuf: %w", err)
 	}
 
-	return protojson.MarshalOptions{
+	data, err := protojson.MarshalOptions{
 		Multiline: false,
 		Resolver:  dynamicpb.NewTypes(h.registry.Files),
 	}.Marshal(dynMsg)
+	return data, msgType, err
 }
 
 // emitEnvelope assembles and prints the {headers, payload, ...} record.
 // A successful decode embeds the JSON value verbatim; otherwise the
 // payload is base64-encoded and the failure (if any) is captured in
 // payloadError so every message produces exactly one output record.
-func (h *payloadHandler) emitEnvelope(msg message.InboundMessage, payload []byte, value json.RawMessage, decodeErr error) error {
+// protoType is the proto message type used for decoding (empty for JSON
+// or raw payloads); it is recorded even on decode failure to tell the
+// consumer which type was attempted.
+func (h *payloadHandler) emitEnvelope(msg message.InboundMessage, payload []byte, value json.RawMessage, protoType string, decodeErr error) error {
 	env := envelope{
-		Headers: collectPayloadHeaders(msg, payload),
+		Headers:     collectPayloadHeaders(msg, payload),
+		PayloadType: protoType,
 	}
 	if value != nil && decodeErr == nil {
 		env.Payload = value
