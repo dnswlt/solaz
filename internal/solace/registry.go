@@ -2,13 +2,16 @@ package solace
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/bufbuild/protocompile"
+	"github.com/dnswlt/solaz/internal/trace"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
@@ -29,9 +32,24 @@ type ProtoRegistry struct {
 }
 
 // NewProtoRegistry compiles all .proto files found in the given paths.
+// Missing paths are skipped with a debug log so that a stale directory
+// in a profile doesn't break the whole tool. Other errors
+// (permission denied, unreadable files, ...) still surface.
 func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
-	var protoFiles []string
+	existing := make([]string, 0, len(paths))
 	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				trace.Debugf("proto_paths: skipping %q (not found)", p)
+				continue
+			}
+			return nil, fmt.Errorf("proto_paths %s: %w", p, err)
+		}
+		existing = append(existing, p)
+	}
+
+	var protoFiles []string
+	for _, p := range existing {
 		err := filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -56,7 +74,7 @@ func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
 	}
 
 	baseResolver := protocompile.WithStandardImports(&protocompile.SourceResolver{
-		ImportPaths: paths,
+		ImportPaths: existing,
 	})
 
 	compiler := protocompile.Compiler{
