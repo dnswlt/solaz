@@ -9,11 +9,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bufbuild/protocompile"
 	"github.com/dnswlt/solaz/internal/trace"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	_ "google.golang.org/genproto/googleapis/type/date"
 	_ "google.golang.org/genproto/googleapis/type/datetime"
@@ -143,4 +146,124 @@ func (r *globalFallbackResolver) FindFileByPath(path string) (protocompile.Searc
 		return protocompile.SearchResult{Desc: fd}, nil
 	}
 	return res, err
+}
+
+// IdentifyMessage attempts to find the most likely message types for a raw payload
+// by scoring the unmarshaled structure against all known descriptors.
+func (r *ProtoRegistry) IdentifyMessage(payload []byte) ([]string, error) {
+	if len(payload) == 0 {
+		return nil, errors.New("empty payload perfectly matches all messages")
+	}
+
+	var candidates []string
+	maxScore := -1
+
+	names := r.MessageNames()
+	for _, name := range names {
+		md, err := r.FindMessage(name)
+		if err != nil {
+			continue
+		}
+
+		msg := dynamicpb.NewMessage(md)
+		if err := proto.Unmarshal(payload, msg); err != nil {
+			continue
+		}
+
+		score := scoreMessage(msg)
+		if score < 0 {
+			continue
+		}
+
+		if score > maxScore {
+			maxScore = score
+			candidates = []string{name}
+		} else if score == maxScore {
+			candidates = append(candidates, name)
+		}
+	}
+
+	return candidates, nil
+}
+
+// scoreMessage calculates a heuristic confidence score for a decoded message.
+// It recursively evaluates structural depth and type adherence to differentiate
+// between valid payloads and accidental wire-type collisions.
+//
+// Scoring rules:
+//   - Disqualification (-1): Message contains unknown fields, zero populated
+//     fields, or invalid UTF-8 sequences in any string field.
+//   - Base Score (+1): Awarded for any successfully populated field.
+//   - Enum Bonus (+2): Awarded if an integer maps to a known enum value,
+//     providing a strong type-safety signal.
+//   - Nesting Multiplier (*2): Sub-messages are scored recursively and multiplied
+//     to heavily favor deep structural alignment over flat byte arrays.
+//
+// Returns a positive integer score, or -1 if the message is disqualified.
+func scoreMessage(msg protoreflect.Message) int {
+	if len(msg.GetUnknown()) > 0 {
+		return -1
+	}
+
+	score := 0
+	invalidUTF8 := false
+
+	msg.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
+		score += 1
+
+		switch fd.Kind() {
+		case protoreflect.MessageKind:
+			if fd.IsList() {
+				list := val.List()
+				for i := 0; i < list.Len(); i++ {
+					subScore := scoreMessage(list.Get(i).Message())
+					if subScore < 0 {
+						invalidUTF8 = true
+						return false
+					}
+					score += subScore * 2
+				}
+			} else {
+				subScore := scoreMessage(val.Message())
+				if subScore < 0 {
+					invalidUTF8 = true
+					return false
+				}
+				score += subScore * 2
+			}
+
+		case protoreflect.StringKind:
+			if fd.IsList() {
+				list := val.List()
+				for i := 0; i < list.Len(); i++ {
+					if !utf8.ValidString(list.Get(i).String()) {
+						invalidUTF8 = true
+						return false
+					}
+				}
+			} else {
+				if !utf8.ValidString(val.String()) {
+					invalidUTF8 = true
+					return false
+				}
+			}
+
+		case protoreflect.EnumKind:
+			enumVal := fd.Enum().Values().ByNumber(val.Enum())
+			if enumVal != nil {
+				score += 2
+			}
+		}
+		return true
+	})
+
+	if invalidUTF8 {
+		return -1
+	}
+
+	if score == 0 {
+		return -1
+	}
+
+	return score
 }
