@@ -1,8 +1,12 @@
 package solace
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"os"
 	"sort"
 	"strings"
@@ -29,6 +33,8 @@ type ReceiveOptions struct {
 	TopicTypes  map[string]string
 	Mode        string
 	Count       int
+	Raw         bool // payload mode: emit raw bytes, skip content-type dispatch
+	Envelope    bool // payload mode: emit {headers, payload, ...} JSON envelope
 }
 
 // Run connects to the messaging service, subscribes to the configured topics,
@@ -124,10 +130,12 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 	case "headers":
 		return &headersHandler{}, nil
 	case "payload":
-		return &printJSONHandler{
+		return &payloadHandler{
 			registry:    opts.Registry,
 			messageType: opts.MessageType,
 			topicIndex:  newTopicTypeIndex(opts.TopicTypes),
+			raw:         opts.Raw,
+			envelope:    opts.Envelope,
 		}, nil
 	case "stats":
 		return &statsHandler{topics: make(map[string]*topicStats)}, nil
@@ -201,36 +209,119 @@ func (h *headersHandler) handle(msg message.InboundMessage) error {
 
 func (h *headersHandler) finish() error { return nil }
 
-type printJSONHandler struct {
+type payloadHandler struct {
 	registry    *ProtoRegistry
 	messageType string
 	topicIndex  *topicTypeIndex
+	raw         bool
+	envelope    bool
 }
 
-func (h *printJSONHandler) handle(msg message.InboundMessage) error {
-	msgType := h.messageType
-	if msgType == "" {
-		mt, err := h.topicIndex.Lookup(msg.GetDestinationName())
-		if err != nil {
-			return err
-		}
-		msgType = mt
-	}
-	if msgType == "" {
-		if v, ok := msg.GetApplicationMessageType(); ok {
-			msgType = v
-		}
+// envelope is the JSON record emitted in --envelope mode. The Payload
+// field is either a json.RawMessage (when the payload was successfully
+// decoded as JSON or protobuf) or a base64-encoded string (raw bytes or
+// failed decode). PayloadEncoding tells the consumer which it got.
+type envelope struct {
+	Headers         map[string]any `json:"headers"`
+	Payload         any            `json:"payload"`
+	PayloadEncoding string         `json:"payloadEncoding"`
+	PayloadError    string         `json:"payloadError,omitempty"`
+}
+
+func (h *payloadHandler) handle(msg message.InboundMessage) error {
+	payload, _ := msg.GetPayloadAsBytes()
+	ct, _ := msg.GetHTTPContentType()
+	value, decodeErr := h.decode(msg, payload, ct)
+
+	if h.envelope {
+		return h.emitEnvelope(msg, payload, value, decodeErr)
 	}
 
-	payload, _ := msg.GetPayloadAsBytes()
-	if len(payload) == 0 {
-		return fmt.Errorf("message payload is empty")
+	// Non-envelope: an attempted-but-failed decode is a per-message warning.
+	if decodeErr != nil {
+		return decodeErr
 	}
+	if value != nil {
+		fmt.Println(string(value))
+		return nil
+	}
+	trace.Debugf("payload: raw output (%d bytes, content-type=%q)", len(payload), ct)
+	_, err := os.Stdout.Write(payload)
+	return err
+}
+
+// decode runs the content-type / hint dispatch and returns:
+//   - (jsonValue, nil) when the payload was successfully decoded to JSON;
+//   - (nil, err)       when a decode was attempted and failed;
+//   - (nil, nil)       when no decode was attempted (--raw or unknown
+//     format with no proto hint).
+func (h *payloadHandler) decode(msg message.InboundMessage, payload []byte, ct string) (json.RawMessage, error) {
+	if h.raw {
+		// --raw is an explicit override — bypass content-type dispatch.
+		return nil, nil
+	}
+	if h.messageType != "" {
+		// --type is an explicit override — always decode as protobuf.
+		return h.decodeProto(msg, payload, h.messageType)
+	}
+	if isJSONContentType(ct) {
+		return compactJSON(payload, ct)
+	}
+	msgType, hasHint, err := h.resolveProtoHint(msg)
+	if err != nil {
+		return nil, err
+	}
+	if hasHint || isProtobufContentType(ct) {
+		return h.decodeProto(msg, payload, msgType)
+	}
+	return nil, nil
+}
+
+// resolveProtoHint reports whether the message carries any signal that
+// it should be decoded as protobuf even without an explicit content
+// type: a matching topic_types pattern (or an ambiguity error from
+// one), or an application_message_type header. The resolved type — if
+// known — is returned alongside, so callers don't need a second Lookup
+// on the dispatch path. An ambiguity error from topic_types is reported
+// as hasHint=true with a non-nil err so it surfaces instead of silently
+// degrading to raw output.
+func (h *payloadHandler) resolveProtoHint(msg message.InboundMessage) (msgType string, hasHint bool, err error) {
+	if h.topicIndex != nil {
+		mt, lookupErr := h.topicIndex.Lookup(msg.GetDestinationName())
+		if lookupErr != nil {
+			return "", true, lookupErr
+		}
+		if mt != "" {
+			return mt, true, nil
+		}
+	}
+	if v, ok := msg.GetApplicationMessageType(); ok {
+		return v, true, nil
+	}
+	return "", false, nil
+}
+
+// compactJSON returns payload compacted onto a single line. ct is used
+// only to enrich the error message on invalid JSON.
+func compactJSON(payload []byte, ct string) (json.RawMessage, error) {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, payload); err != nil {
+		return nil, fmt.Errorf("invalid JSON payload (content-type %s): %w", ct, err)
+	}
+	return buf.Bytes(), nil
+}
+
+// decodeProto unmarshals payload using the named protobuf type and
+// returns the result as single-line JSON. msgType must already be
+// resolved by the caller (`--type`, content-type dispatch, or
+// resolveProtoHint); an empty msgType yields a clear "unknown type"
+// error so every caller routes through this single function.
+func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte, msgType string) (json.RawMessage, error) {
 	if h.registry == nil {
-		return fmt.Errorf("no proto registry configured (set proto_paths in profile)")
+		return nil, fmt.Errorf("no proto registry configured (set proto_paths in profile)")
 	}
 	if msgType == "" {
-		return fmt.Errorf("message type is unknown for topic %q (use --type or configure topic_types in the profile)", msg.GetDestinationName())
+		return nil, fmt.Errorf("message type is unknown for topic %q (use --type or configure topic_types in the profile)", msg.GetDestinationName())
 	}
 
 	if idx := strings.LastIndex(msgType, "/"); idx >= 0 {
@@ -239,27 +330,126 @@ func (h *printJSONHandler) handle(msg message.InboundMessage) error {
 
 	desc, err := h.registry.FindMessage(msgType)
 	if err != nil {
-		return fmt.Errorf("message descriptor not found for %s: %w", msgType, err)
+		return nil, fmt.Errorf("message descriptor not found for %s: %w", msgType, err)
 	}
 
 	dynMsg := dynamicpb.NewMessage(desc)
 	if err := proto.Unmarshal(payload, dynMsg); err != nil {
-		return fmt.Errorf("failed to unmarshal protobuf: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal protobuf: %w", err)
 	}
 
-	jsonBytes, err := protojson.MarshalOptions{
+	return protojson.MarshalOptions{
 		Multiline: false,
 		Resolver:  dynamicpb.NewTypes(h.registry.Files),
 	}.Marshal(dynMsg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal to JSON: %w", err)
-	}
+}
 
-	fmt.Println(string(jsonBytes))
+// emitEnvelope assembles and prints the {headers, payload, ...} record.
+// A successful decode embeds the JSON value verbatim; otherwise the
+// payload is base64-encoded and the failure (if any) is captured in
+// payloadError so every message produces exactly one output record.
+func (h *payloadHandler) emitEnvelope(msg message.InboundMessage, payload []byte, value json.RawMessage, decodeErr error) error {
+	env := envelope{
+		Headers: collectPayloadHeaders(msg, payload),
+	}
+	if value != nil && decodeErr == nil {
+		env.Payload = value
+		env.PayloadEncoding = "json"
+	} else {
+		env.Payload = base64.StdEncoding.EncodeToString(payload)
+		env.PayloadEncoding = "base64"
+		if decodeErr != nil {
+			env.PayloadError = decodeErr.Error()
+		}
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
 	return nil
 }
 
-func (h *printJSONHandler) finish() error { return nil }
+// collectPayloadHeaders extracts every set message header into a map for
+// JSON serialization. Field names match the tabular `headers` mode for
+// consistency; JSON key order is alphabetical (encoding/json sorts).
+func collectPayloadHeaders(msg message.InboundMessage, payload []byte) map[string]any {
+	h := map[string]any{
+		"Destination":    msg.GetDestinationName(),
+		"ClassOfService": msg.GetClassOfService(),
+		"PayloadBytes":   len(payload),
+	}
+	if v, ok := msg.GetApplicationMessageID(); ok {
+		h["AppMessageID"] = v
+	}
+	if v, ok := msg.GetApplicationMessageType(); ok {
+		h["AppMessageType"] = v
+	}
+	if v, ok := msg.GetHTTPContentType(); ok {
+		h["HTTPContentType"] = v
+	}
+	if v, ok := msg.GetHTTPContentEncoding(); ok {
+		h["HTTPContentEncoding"] = v
+	}
+	if v, ok := msg.GetCorrelationID(); ok {
+		h["CorrelationID"] = v
+	}
+	if v, ok := msg.GetSenderID(); ok {
+		h["SenderID"] = v
+	}
+	if v, ok := msg.GetSenderTimestamp(); ok {
+		h["SenderTimestamp"] = v.Format(time.RFC3339Nano)
+	}
+	if v, ok := msg.GetTimeStamp(); ok {
+		h["ReceiveTimestamp"] = v.Format(time.RFC3339Nano)
+	}
+	if v, ok := msg.GetSequenceNumber(); ok {
+		h["SequenceNumber"] = v
+	}
+	if exp := msg.GetExpiration(); !exp.IsZero() && exp.Unix() != 0 {
+		h["Expiration"] = exp.Format(time.RFC3339Nano)
+	}
+	if v, ok := msg.GetPriority(); ok {
+		h["Priority"] = v
+	}
+	if props := msg.GetProperties(); len(props) > 0 {
+		h["Properties"] = props
+	}
+	return h
+}
+
+func (h *payloadHandler) finish() error { return nil }
+
+// isJSONContentType reports whether ct names a JSON media type, including
+// the RFC 6839 `+json` structured suffix (e.g. `application/vnd.foo+json`).
+// Media-type parameters such as charset are ignored.
+func isJSONContentType(ct string) bool {
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	mediaType = strings.ToLower(mediaType)
+	return mediaType == "application/json" ||
+		mediaType == "text/json" ||
+		strings.HasSuffix(mediaType, "+json")
+}
+
+// isProtobufContentType reports whether ct names one of the common
+// protobuf media types. `application/octet-stream` is deliberately
+// excluded — it's too generic to imply protobuf.
+func isProtobufContentType(ct string) bool {
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(mediaType) {
+	case "application/x-protobuf",
+		"application/vnd.google.protobuf",
+		"application/protobuf":
+		return true
+	}
+	return false
+}
 
 // topicStats stores aggregated statistics for a single topic.
 type topicStats struct {

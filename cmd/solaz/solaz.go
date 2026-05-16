@@ -193,7 +193,7 @@ func runPayload(args []string) {
 		timeout, maxRuntime     time.Duration
 		msgType                 string
 		count                   int
-		verbose                 bool
+		verbose, raw, envelope  bool
 		vars                    = &varsFlag{}
 		topics                  topicsFlag
 	)
@@ -204,6 +204,8 @@ func runPayload(args []string) {
 	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
 	fs.StringVar(&msgType, "type", "", "protobuf message type to use for decoding")
 	fs.IntVar(&count, "count", 1, "number of messages to print")
+	fs.BoolVar(&raw, "raw", false, "write payloads to stdout as raw bytes, bypassing content-type decoding")
+	fs.BoolVar(&envelope, "envelope", false, "emit {headers, payload, payloadEncoding, ...} JSON envelopes; every message produces one record")
 	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
@@ -214,10 +216,13 @@ func runPayload(args []string) {
 	if len(topics) == 0 {
 		fatalf("--topic is required")
 	}
+	if raw && msgType != "" {
+		fatalf("--raw and --type are mutually exclusive")
+	}
 	profile := loadProfile(configPath, profileName, vars.m, true)
 
 	var registry *solace.ProtoRegistry
-	if len(profile.ProtoPaths) > 0 {
+	if !raw && len(profile.ProtoPaths) > 0 {
 		var err error
 		registry, err = solace.NewProtoRegistry(profile.ProtoPaths)
 		if err != nil {
@@ -234,6 +239,8 @@ func runPayload(args []string) {
 		TopicTypes:  profile.TopicTypes,
 		Mode:        "payload",
 		Count:       count,
+		Raw:         raw,
+		Envelope:    envelope,
 	})
 }
 

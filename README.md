@@ -11,8 +11,22 @@ solaz <command> [flags]
 ### Commands
 
 - `headers` — print message headers and payload byte size for each received message.
-- `payload` — print message payloads as single-line JSON. Decodes protobuf
-  payloads using the descriptors loaded from `proto_paths`.
+- `payload` — print message payloads, one record per message, dispatched
+  on the message's `Content-Type` (and explicit overrides):
+  - `--raw` set → write raw payload bytes to stdout unchanged, bypassing
+    content-type dispatch.
+  - `--type` set → always decode as protobuf with that type.
+  - JSON content type (`application/json`, `text/json`, or any `+json`
+    structured-suffix type) → compact onto a single line and print as-is.
+  - Protobuf content type (`application/x-protobuf`,
+    `application/vnd.google.protobuf`, `application/protobuf`), or any
+    proto hint (matching `topic_types` entry, or an
+    `application_message_type` header) → decode as protobuf using the
+    descriptors from `proto_paths` and print as single-line JSON.
+  - Anything else → write the raw payload bytes to stdout unchanged. No
+    framing, no trailing newline — pipe into a downstream decoder of your
+    choice. Use `--count 1` (the default) when consuming raw output, or
+    handle framing yourself for larger batches.
 - `stats`   — aggregate per-topic count, total bytes, and average size across
   messages.
 - `types`   — list all protobuf message types known to the proto registry
@@ -39,6 +53,10 @@ Flags common to all commands:
 Per-command flags:
 
 - `payload`: `--count N` (default `1`) — number of messages to print.
+  `--raw` — emit raw payload bytes, bypassing content-type dispatch
+  (mutually exclusive with `--type`).
+  `--envelope` — emit one `{headers, payload, payloadEncoding, ...}` JSON
+  object per message (see [Envelope mode](#envelope-mode)).
 - `stats`: `--count N` (default `100`) — number of messages to aggregate.
 
 The loop stops when `--count` is reached *or* `--max-runtime` elapses,
@@ -71,6 +89,53 @@ receive-related flags don't apply.
 
 The CLI connects with client-certificate auth, runs the receive loop, and
 disconnects when done.
+
+### Envelope mode
+
+With `--envelope`, the `payload` command emits one JSON object per message
+that wraps the headers and the payload together. Every message produces a
+record — payloads that can't be decoded are base64-encoded rather than
+dropped — so the output stream is safe to feed straight into `jq` or a log
+indexer without losing messages.
+
+Schema:
+
+```json
+{
+  "headers": {
+    "Destination": "trades/orders/btc",
+    "AppMessageType": "com.example.Order",
+    "HTTPContentType": "application/json",
+    "ReceiveTimestamp": "2026-05-15T12:34:56.789Z",
+    "ClassOfService": 1,
+    "PayloadBytes": 124
+  },
+  "payload": { "price": 50000, "side": "buy" },
+  "payloadEncoding": "json"
+}
+```
+
+- `headers` — every set header field, named as in the tabular `headers`
+  mode. JSON key order is alphabetical.
+- `payload` — the decoded JSON value (from a JSON content type or a
+  protobuf decode), or a base64-encoded string of the raw bytes.
+- `payloadEncoding` — `"json"` or `"base64"`, so consumers don't have to
+  guess.
+- `payloadError` — only present when a decode was attempted and failed
+  (e.g. `--type` set but the descriptor is missing); the original bytes
+  are still available under `payload` as base64.
+
+`--envelope` composes with `--type` (force-decode, base64 on failure) and
+`--raw` (always base64, no decode attempted).
+
+```sh
+# Tail 100 orders with headers, pretty-printed
+solaz payload --envelope --topic 'trades/orders/>' --count 100 | jq .
+
+# Pull just the destinations + sequence numbers
+solaz payload --envelope --topic 'foo/>' --count 50 \
+  | jq -r '[.headers.Destination, .headers.SequenceNumber] | @tsv'
+```
 
 ## Config
 

@@ -54,10 +54,12 @@ These are the non-negotiables. New code and refactors should reinforce them.
 
 Subcommands fall into two categories:
 
-- **Pipeable** (machine-readable, one record per line, no decoration):
-  `payload` emits single-line JSON; `types` emits one FQ name per line.
-  These must stay `jq`/`grep`/`awk`-friendly. No headers, no summary lines,
-  no progress chatter on stdout. Ever.
+- **Pipeable** (machine-readable, one record per message, no decoration):
+  `payload` emits single-line JSON for known content types (JSON,
+  protobuf) and raw payload bytes for everything else; `types` emits one
+  FQ name per line. These must stay `jq`/`grep`/`awk`-friendly (or
+  whatever decoder fits the payload). No headers, no summary lines, no
+  progress chatter on stdout. Ever.
 - **Human-readable** (tabular, decorated): `headers`, `stats`. These use
   `text/tabwriter` and are fine to format for human eyes. Don't pipe them.
 
