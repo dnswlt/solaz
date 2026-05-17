@@ -2,6 +2,24 @@
 
 A simple Solace subscriber CLI.
 
+## Getting started
+
+Install the latest release (`linux/amd64` or `darwin/arm64`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dnswlt/solaz/main/install.sh | sh
+```
+
+Prebuilt binaries are also on the
+[releases page](https://github.com/dnswlt/solaz/releases). On other
+platforms, build from source with `go build ./cmd/solaz`.
+
+Drop a broker profile into `~/.solaz.conf` (see [Config](#config)), then:
+
+```sh
+solaz headers --topic 'foo/>'
+```
+
 ## Usage
 
 ```sh
