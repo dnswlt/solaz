@@ -210,7 +210,7 @@ Optional fields:
 - `client_name` — display name for the connection in the broker's
   connected-clients list. Cosmetic; not used for authentication.
 - `insecure_skip_verify` — dev-only. Disables broker certificate
-  validation (chain *and* hostname). Prints a warning to stderr.
+  validation (chain *and* hostname).
 - `proto_paths` — list of directories searched for `.proto` files used by
   the `print` command to decode protobuf payloads to JSON. Required for
   `print` if message payloads are protobuf-encoded.
@@ -279,11 +279,13 @@ Expansion happens before validation, so a templated profile with no
 rather than failing later at TLS time. Profiles with no placeholders are
 unaffected.
 
-For frequently-used values, drop them into a companion `vars` file: it
-sits next to the config (default `~/.solaz.vars`, or the `--config` path
-with its extension swapped for `.vars`). Each line is `KEY=VALUE`; blank
-lines and `#`-prefixed lines are ignored. CLI `--var` flags override
-matching keys from the file. Example `~/.solaz.vars`:
+### Vars file
+
+For frequently-used template values, drop them into a companion vars file
+next to the config (default `~/.solaz.vars`, or the `--config` path with
+its extension swapped for `.vars`). Each line is `KEY=VALUE`; blank lines
+and `#`-prefixed lines are ignored. CLI `--var` flags override matching
+keys from the file. Example `~/.solaz.vars`:
 
 ```sh
 # default expansion values for ~/.solaz.conf
@@ -292,15 +294,20 @@ vpn       = payments-dev
 creds     = /home/me/solaz-creds
 ```
 
-with that in place, `solaz headers --topic 'foo/>'` works without any
+With that in place, `solaz headers --topic 'foo/>'` works without any
 `--var` flags; you can still override one ad-hoc with
 `--var namespace=qa-payments-1`.
 
 ### Populating the trust store
 
+Only needed if you set `trust_store_dir`. For dev brokers you can skip
+this entirely with `insecure_skip_verify: true`. If your org already
+ships a trust store, point `trust_store_dir` at it and you're done.
+
 `trust_store_dir` is a directory of CA certs in OpenSSL hashed-directory
-format (filenames are `<subject-hash>.0`, not arbitrary `*.pem`). The
-quickest way to seed it from a live broker is to pull its chain and rehash:
+format (filenames are `<subject-hash>.0`, not arbitrary `*.pem`). As an
+ad-hoc bootstrap when you don't have one, pull the broker's chain from a
+live connection and rehash it:
 
 ```sh
 HOST=broker.example.com
