@@ -50,6 +50,13 @@ solaz <command> [flags]
 - `types`   — list all protobuf message types known to the proto registry
   (compiled from `proto_paths`). Does not connect to a broker; useful for
   discovering the right value to pass to `--type`.
+- `learn-types` — for each subscribed topic, narrow down the protobuf
+  message type carried on it by intersecting the candidate sets from
+  successive messages, and print one `topic=type` line per resolved
+  topic. Topics already covered by `topic_types` (from `.conf` or the
+  companion `.types` file) are skipped. With `--save`, the new mappings
+  are merged into the `.types` file alongside the config. See
+  [Learning topic types](#learning-topic-types).
 
 ### Flags
 
@@ -78,6 +85,9 @@ Per-command flags:
   `--infer` — heuristically infer the protobuf message type when
   no other hint resolves one.
 - `stats`: `--count N` (default `100`) — number of messages to aggregate.
+- `learn-types`: `--count N` (default `1000`), `--save` — merge resolved
+  mappings into the companion `.types` file rather than only printing
+  them.
 
 The loop stops when `--count` is reached *or* `--max-runtime` elapses,
 whichever comes first.
@@ -109,6 +119,26 @@ receive-related flags don't apply.
 
 The CLI connects with client-certificate auth, runs the receive loop, and
 disconnects when done.
+
+### Learning topic types
+
+`learn-types` listens to live traffic and narrows down the protobuf type
+on each topic by intersecting candidates across successive messages.
+Resolved mappings print to stdout as `topic=type` lines; with `--save`
+they are merged into a companion `.types` file (default `~/.solaz.types`).
+
+```sh
+# Print the mapping for whatever is flowing on the orders subtree
+solaz learn-types --topic 'trades/orders/>' --profile prod
+
+# Same, but persist so future runs pick it up automatically
+solaz learn-types --topic 'trades/>' --save --max-runtime 5m
+```
+
+The `.types` file is auto-consulted by every command. Its format mirrors
+`.vars` (one `topic=type` per line). `topic_types` in `.conf` wins on
+key collision, so a manually-curated mapping always overrides a learned
+one. To re-learn a topic, delete its line from `.types`.
 
 ### Envelope mode
 

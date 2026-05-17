@@ -16,10 +16,11 @@ import (
 const usage = `Usage: %s <command> [flags]
 
 Commands:
-  headers   Print message headers and payload size
-  print     Print message payloads as single-line JSON
-  stats     Aggregate metrics across messages
-  types     List protobuf message types known to the proto registry
+  headers       Print message headers and payload size
+  print         Print message payloads as single-line JSON
+  stats         Aggregate metrics across messages
+  types         List protobuf message types known to the proto registry
+  learn-types   Infer per-topic message types from live traffic and emit topic=type lines
 `
 
 // version is overridden at build time via -ldflags="-X main.version=...".
@@ -102,17 +103,24 @@ func main() {
 		runStats(args)
 	case "types":
 		runTypes(args)
+	case "learn-types":
+		runLearnTypes(args)
 	default:
-		fatalf("unknown command %q (expected 'headers', 'print', 'stats', or 'types')", cmd)
+		fatalf("unknown command %q (expected 'headers', 'print', 'stats', 'types', or 'learn-types')", cmd)
 	}
 }
 
 // loadProfile resolves a profile from --config / --profile / --var. Vars
 // from the companion `.vars` file (default ~/.solaz.vars, or the --config
 // path with its extension swapped) are merged in as a baseline; CLI --var
-// flags override them. When validate is true the connection fields
-// required to reach a broker are also checked.
-func loadProfile(configPath, profileName string, vars map[string]string, validate bool) *solace.Profile {
+// flags override them. Topic→type mappings from the companion `.types`
+// file are folded into profile.TopicTypes as a fallback: an entry already
+// present in the .conf TopicTypes wins (so manual config always
+// overrides auto-learned values). When validate is true the connection
+// fields required to reach a broker are also checked. The resolved
+// configPath is returned alongside the profile so callers can derive
+// sibling paths like .types without redoing the default-fallback logic.
+func loadProfile(configPath, profileName string, vars map[string]string, validate bool) (*solace.Profile, string) {
 	if configPath == "" {
 		configPath = solace.DefaultConfigPath()
 	}
@@ -136,13 +144,35 @@ func loadProfile(configPath, profileName string, vars map[string]string, validat
 	if err := solace.ExpandProfile(profile, merged); err != nil {
 		fatalf("profile %q: %v", profile.Name, err)
 	}
+
+	typesPath := solace.TypesPath(configPath)
+	learned, err := solace.LoadTypesFile(typesPath)
+	if err != nil {
+		fatalf("types: %v", err)
+	}
+	if len(learned) > 0 {
+		if profile.TopicTypes == nil {
+			profile.TopicTypes = make(map[string]string, len(learned))
+		}
+		added := 0
+		for k, v := range learned {
+			if _, exists := profile.TopicTypes[k]; exists {
+				continue
+			}
+			profile.TopicTypes[k] = v
+			added++
+		}
+		trace.Debugf("loaded %d learned types from %s (%d added; %d shadowed by config)",
+			len(learned), typesPath, added, len(learned)-added)
+	}
+
 	if validate {
 		if err := solace.ValidateProfile(profile, configPath); err != nil {
 			fatalf("profile: %v", err)
 		}
 	}
 	trace.Debugf("loaded profile %q from %s (%d vars)", profile.Name, configPath, len(merged))
-	return profile
+	return profile, configPath
 }
 
 // runReceive builds a messaging service for the profile and runs the
@@ -183,7 +213,7 @@ func runHeaders(args []string) {
 	if len(topics) == 0 {
 		fatalf("--topic is required")
 	}
-	profile := loadProfile(configPath, profileName, vars.m, true)
+	profile, _ := loadProfile(configPath, profileName, vars.m, true)
 
 	runReceive(profile, solace.ReceiveOptions{
 		Topics:     topics,
@@ -234,7 +264,7 @@ func runPrint(args []string) {
 	if infer && msgType != "" {
 		fatalf("--infer and --type are mutually exclusive")
 	}
-	profile := loadProfile(configPath, profileName, vars.m, true)
+	profile, _ := loadProfile(configPath, profileName, vars.m, true)
 	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
 
 	if infer && len(profile.ProtoPaths) == 0 {
@@ -290,7 +320,7 @@ func runStats(args []string) {
 	if len(topics) == 0 {
 		fatalf("--topic is required")
 	}
-	profile := loadProfile(configPath, profileName, vars.m, true)
+	profile, _ := loadProfile(configPath, profileName, vars.m, true)
 
 	runReceive(profile, solace.ReceiveOptions{
 		Topics:     topics,
@@ -320,7 +350,7 @@ func runTypes(args []string) {
 	fs.Parse(args)
 	trace.SetVerbose(verbose)
 
-	profile := loadProfile(configPath, profileName, vars.m, false)
+	profile, _ := loadProfile(configPath, profileName, vars.m, false)
 	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
 
 	if len(profile.ProtoPaths) == 0 {
@@ -333,4 +363,66 @@ func runTypes(args []string) {
 	for _, name := range registry.MessageNames() {
 		fmt.Println(name)
 	}
+}
+
+// runLearnTypes subscribes to the supplied topics and tries to determine
+// the protobuf message type carried on each. Topics already covered by
+// the profile's topic_types (from .conf or the companion .types file) are
+// skipped, as are individual messages that carry an
+// application_message_type header or a JSON content type. Resolved
+// mappings are emitted to stdout as `topic=type` lines; ambiguous or
+// conflicting topics surface as `warning:` lines on stderr. With --save,
+// the resolved mappings are merged into the companion `.types` file.
+func runLearnTypes(args []string) {
+	var (
+		configPath, profileName string
+		timeout, maxRuntime     time.Duration
+		count                   int
+		verbose, save           bool
+		vars                    = &varsFlag{}
+		topics, protoPaths      stringListFlag
+	)
+	fs := flag.NewFlagSet("learn-types", flag.ExitOnError)
+	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
+	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
+	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
+	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
+	fs.IntVar(&count, "count", 1000, "number of messages to inspect")
+	fs.BoolVar(&save, "save", false, "merge results into <config>.types instead of only printing them")
+	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
+	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
+	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
+	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
+	fs.Var(&protoPaths, "proto-path", "additional path to search for .proto files (may be repeated)")
+	fs.Parse(args)
+	trace.SetVerbose(verbose)
+
+	if len(topics) == 0 {
+		fatalf("--topic is required")
+	}
+	profile, resolvedConfigPath := loadProfile(configPath, profileName, vars.m, true)
+	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
+
+	if len(profile.ProtoPaths) == 0 {
+		fatalf("learn-types requires proto_paths (in the profile) or --proto-path")
+	}
+
+	registry, err := solace.NewProtoRegistry(profile.ProtoPaths)
+	if err != nil {
+		fatalf("proto registry: %v", err)
+	}
+
+	opts := solace.ReceiveOptions{
+		Topics:     topics,
+		Timeout:    timeout,
+		MaxRuntime: maxRuntime,
+		Registry:   registry,
+		TopicTypes: profile.TopicTypes,
+		Mode:       "learn-types",
+		Count:      count,
+	}
+	if save {
+		opts.SaveTypesPath = solace.TypesPath(resolvedConfigPath)
+	}
+	runReceive(profile, opts)
 }

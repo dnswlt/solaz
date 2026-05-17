@@ -2,13 +2,15 @@ package solace
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"mime"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -25,17 +27,18 @@ import (
 
 // ReceiveOptions bundles the parameters for receiving a message.
 type ReceiveOptions struct {
-	Topics      []string
-	Timeout     time.Duration
-	MaxRuntime  time.Duration
-	Registry    *ProtoRegistry
-	MessageType string
-	TopicTypes  map[string]string
-	Mode        string
-	Count       int
-	Raw         bool // print mode: emit raw bytes, skip content-type dispatch
-	Envelope    bool // print mode: emit {headers, payload, ...} JSON envelope
-	InferType   bool // print mode: heuristically infer proto type when unknown
+	Topics        []string
+	Timeout       time.Duration
+	MaxRuntime    time.Duration
+	Registry      *ProtoRegistry
+	MessageType   string
+	TopicTypes    map[string]string
+	Mode          string
+	Count         int
+	Raw           bool   // print mode: emit raw bytes, skip content-type dispatch
+	Envelope      bool   // print mode: emit {headers, payload, ...} JSON envelope
+	InferType     bool   // print mode: heuristically infer proto type when unknown
+	SaveTypesPath string // learn-types mode: if non-empty, merge results into this file
 }
 
 // Run connects to the messaging service, subscribes to the configured topics,
@@ -141,6 +144,16 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 		}, nil
 	case "stats":
 		return &statsHandler{topics: make(map[string]*topicStats)}, nil
+	case "learn-types":
+		if opts.Registry == nil {
+			return nil, fmt.Errorf("learn-types requires a proto registry")
+		}
+		return &learnHandler{
+			registry:   opts.Registry,
+			topicIndex: newTopicTypeIndex(opts.TopicTypes),
+			savePath:   opts.SaveTypesPath,
+			results:    make(map[string]*learnState),
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown mode: %q", opts.Mode)
 	}
@@ -193,11 +206,8 @@ func (h *headersHandler) handle(msg message.InboundMessage) error {
 
 	if props := msg.GetProperties(); len(props) > 0 {
 		fmt.Println("Properties:")
-		keys := make([]string, 0, len(props))
-		for k := range props {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
+		keys := slices.Collect(maps.Keys(props))
+		slices.Sort(keys)
 		pw := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 		for _, k := range keys {
 			fmt.Fprintf(pw, "  %s\t=\t%v\n", k, props[k])
@@ -512,16 +522,13 @@ func (h *statsHandler) finish() error {
 		return nil
 	}
 
-	names := make([]string, 0, len(h.topics))
-	for t := range h.topics {
-		names = append(names, t)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		ci, cj := h.topics[names[i]].Count, h.topics[names[j]].Count
-		if ci != cj {
-			return ci > cj
+	names := slices.Collect(maps.Keys(h.topics))
+	slices.SortFunc(names, func(a, b string) int {
+		sa, sb := h.topics[a], h.topics[b]
+		if sa.Count != sb.Count {
+			return cmp.Compare(sb.Count, sa.Count) // descending count
 		}
-		return names[i] < names[j]
+		return cmp.Compare(a, b) // ascending name
 	})
 
 	var totalCount int
@@ -542,6 +549,150 @@ func (h *statsHandler) finish() error {
 	avg := float64(totalBytes) / float64(totalCount)
 	fmt.Fprintf(w, "TOTAL\t%d\t%s\t%s\n", totalCount, formatBytes(float64(totalBytes)), formatBytes(avg))
 	return w.Flush()
+}
+
+// learnHandler narrows the protobuf message type for every observed topic
+// by intersecting the candidate sets returned by InferMessageType across
+// successive samples. Topics already covered by topic_types (from .conf
+// or .types) are skipped; so are messages that carry a per-message
+// application_message_type hint or a JSON content type, since those can't
+// usefully contribute to learning a per-topic mapping.
+type learnHandler struct {
+	registry   *ProtoRegistry
+	topicIndex *topicTypeIndex
+	savePath   string
+	results    map[string]*learnState
+}
+
+// learnState tracks per-topic narrowing. candidates is the running
+// intersection of InferMessageType results; nil means "no informative
+// sample seen yet". dropped is set when the intersection drops to zero —
+// that means two samples disagreed, which under our "one type per topic"
+// assumption is a real conflict worth surfacing.
+type learnState struct {
+	candidates []string
+	samples    int
+	dropped    bool
+}
+
+func (h *learnHandler) handle(msg message.InboundMessage) error {
+	topic := msg.GetDestinationName()
+	if h.topicIndex != nil {
+		if mt, _ := h.topicIndex.Lookup(topic); mt != "" {
+			return nil
+		}
+	}
+	if _, ok := msg.GetApplicationMessageType(); ok {
+		return nil
+	}
+	payload, _ := msg.GetPayloadAsBytes()
+	if len(payload) == 0 {
+		return nil
+	}
+	ct, _ := msg.GetHTTPContentType()
+	if isJSONContentType(ct) {
+		return nil
+	}
+	candidates, err := h.registry.InferMessageType(payload)
+	if err != nil {
+		return fmt.Errorf("infer: %w", err)
+	}
+	h.observeSample(topic, candidates)
+	return nil
+}
+
+// observeSample updates per-topic state from one classification result.
+// Empty candidate sets count as samples but contribute no narrowing — a
+// single misshapen message must not poison an otherwise-converging topic.
+func (h *learnHandler) observeSample(topic string, candidates []string) {
+	state := h.results[topic]
+	if state == nil {
+		state = &learnState{}
+		h.results[topic] = state
+	}
+	state.samples++
+	if state.dropped || len(candidates) == 0 {
+		return
+	}
+	if state.candidates == nil {
+		state.candidates = append([]string(nil), candidates...)
+		return
+	}
+	state.candidates = intersectSorted(state.candidates, candidates)
+	if len(state.candidates) == 0 {
+		state.dropped = true
+	}
+}
+
+// intersectSorted returns the elements of a that also appear in b. The
+// order from a is preserved so emit-order is deterministic.
+func intersectSorted(a, b []string) []string {
+	set := make(map[string]struct{}, len(b))
+	for _, x := range b {
+		set[x] = struct{}{}
+	}
+	out := a[:0:0]
+	for _, x := range a {
+		if _, ok := set[x]; ok {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// summary partitions the observed topics into resolved (one candidate
+// left), unresolved (still ambiguous), and dropped (intersection went to
+// zero — samples contradicted each other). Returned slices are sorted.
+func (h *learnHandler) summary() (resolved map[string]string, unresolved, dropped []string) {
+	resolved = make(map[string]string)
+	for topic, state := range h.results {
+		switch {
+		case state.dropped:
+			dropped = append(dropped, topic)
+		case len(state.candidates) == 1:
+			resolved[topic] = state.candidates[0]
+		default:
+			// Either still ambiguous (>1 candidates) or never saw an
+			// informative sample (candidates == nil). Both are "we couldn't
+			// learn a type for this topic" from the caller's perspective.
+			unresolved = append(unresolved, topic)
+		}
+	}
+	slices.Sort(unresolved)
+	slices.Sort(dropped)
+	return resolved, unresolved, dropped
+}
+
+func (h *learnHandler) finish() error {
+	resolved, unresolved, dropped := h.summary()
+
+	keys := slices.Collect(maps.Keys(resolved))
+	slices.Sort(keys)
+	for _, topic := range keys {
+		fmt.Printf("%s=%s\n", topic, resolved[topic])
+	}
+
+	for _, topic := range unresolved {
+		state := h.results[topic]
+		if len(state.candidates) == 0 {
+			trace.Warningf("%s: no informative samples (saw %d messages)", topic, state.samples)
+			continue
+		}
+		trace.Warningf("%s: ambiguous after %d samples: %s",
+			topic, state.samples, strings.Join(state.candidates, ", "))
+	}
+	for _, topic := range dropped {
+		trace.Warningf("%s: candidate intersection became empty after %d samples (conflicting types?)",
+			topic, h.results[topic].samples)
+	}
+
+	if h.savePath != "" && len(resolved) > 0 {
+		if err := WriteTypesFile(h.savePath, resolved); err != nil {
+			return fmt.Errorf("write types file %s: %w", h.savePath, err)
+		}
+		trace.Debugf("wrote %d entries to %s", len(resolved), h.savePath)
+	}
+	return nil
 }
 
 func formatBytes(b float64) string {
