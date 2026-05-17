@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install OpenSSL (macOS)
+        if: matrix.goos == 'darwin'
+        run: brew install openssl
+
+      - name: Build
+        env:
+          CGO_ENABLED: '1'
+        run: go build -trimpath -ldflags="-X main.version=${GITHUB_REF_NAME}" -o solaz ./cmd/solaz
+
+      - name: Package
+        run: |
+          name="solaz_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          tar -czf "${name}.tar.gz" solaz
+          shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            solaz_*.tar.gz
+            solaz_*.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/solaz_*.tar.gz
+            dist/solaz_*.tar.gz.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true

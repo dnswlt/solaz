@@ -22,6 +22,9 @@ Commands:
   types     List protobuf message types known to the proto registry
 `
 
+// version is overridden at build time via -ldflags="-X main.version=...".
+var version = "dev"
+
 func fatalf(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", a...)
 	os.Exit(1)
@@ -82,6 +85,10 @@ func main() {
 	cmd := os.Args[1]
 	if cmd == "-h" || cmd == "--help" {
 		fmt.Fprintf(os.Stderr, usage, os.Args[0])
+		os.Exit(0)
+	}
+	if cmd == "--version" || cmd == "-V" {
+		fmt.Printf("solaz %s\n", version)
 		os.Exit(0)
 	}
 
