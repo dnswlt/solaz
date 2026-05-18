@@ -675,14 +675,15 @@ func (h *learnHandler) finish() error {
 	for _, topic := range unresolved {
 		state := h.results[topic]
 		if len(state.candidates) == 0 {
-			trace.Warningf("%s: no informative samples (saw %d messages)", topic, state.samples)
+			trace.Warningf("%s: no proto type matched any of %d samples (registry may not cover this payload)",
+				topic, state.samples)
 			continue
 		}
 		trace.Warningf("%s: ambiguous after %d samples: %s",
 			topic, state.samples, strings.Join(state.candidates, ", "))
 	}
 	for _, topic := range dropped {
-		trace.Warningf("%s: candidate intersection became empty after %d samples (conflicting types?)",
+		trace.Warningf("%s: %d samples have no proto type in common (conflicting schemas on the same topic?)",
 			topic, h.results[topic].samples)
 	}
 
