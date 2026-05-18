@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -141,6 +142,12 @@ message Small {
 message Large {
   string id = 1;
   string note = 2;
+}
+
+message HasMaps {
+  map<string, string> tags = 31;
+  map<string, Inner> children = 32;
+  map<int32, Status> codes = 33;
 }
 `
 
@@ -286,6 +293,84 @@ func TestScoreMessage_AmbiguousAcrossSchemas(t *testing.T) {
 	}
 	if smallScore != largeScore {
 		t.Errorf("expected equal scores for ambiguous match; got Small=%d Large=%d", smallScore, largeScore)
+	}
+}
+
+// TestScoreMessage_MapFields is the regression for a bug where the
+// MessageKind branch called val.Message() on map-typed fields and
+// panicked. scoreMessage must recurse into map entries instead and
+// validate string keys/values for UTF-8.
+func TestScoreMessage_MapFields(t *testing.T) {
+	reg := newScoreTestRegistry(t)
+
+	cases := []struct {
+		name string
+		json string
+		want int
+	}{
+		{
+			// tags +1 base; entries of map<string,string> add no score.
+			name: "string→string map populated",
+			json: `{"tags": {"a": "1", "b": "2"}}`,
+			want: 1,
+		},
+		{
+			// children +1 base; one Inner subentry with one populated field
+			// scores 1, multiplied by 2 = 2; total 3.
+			name: "string→message map recurses with nesting multiplier",
+			json: `{"children": {"k": {"label": "x"}}}`,
+			want: 3,
+		},
+		{
+			// codes +1 base; two known enum values each add +2 = +4; total 5.
+			name: "int→enum map applies enum bonus",
+			json: `{"codes": {"1": "STATUS_ACTIVE", "2": "STATUS_INACTIVE"}}`,
+			want: 5,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			md, err := reg.FindMessage("solaztest.HasMaps")
+			if err != nil {
+				t.Fatalf("FindMessage: %v", err)
+			}
+			msg := dynamicpb.NewMessage(md)
+			if err := protojson.Unmarshal([]byte(tc.json), msg); err != nil {
+				t.Fatalf("protojson.Unmarshal: %v", err)
+			}
+			got := scoreMessage(msg)
+			if got != tc.want {
+				t.Errorf("scoreMessage = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestScoreMessage_MapInvalidUTF8 verifies that an invalid UTF-8 string
+// in a map key or value disqualifies the parent message (score -1).
+func TestScoreMessage_MapInvalidUTF8(t *testing.T) {
+	reg := newScoreTestRegistry(t)
+
+	md, err := reg.FindMessage("solaztest.HasMaps")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build a HasMaps with one tags entry whose value has invalid UTF-8.
+	// Done at the reflection level since protojson would reject the bytes.
+	msg := dynamicpb.NewMessage(md)
+	tagsFd := md.Fields().ByName("tags")
+	if tagsFd == nil {
+		t.Fatal("tags field not found")
+	}
+	mp := msg.Mutable(tagsFd).Map()
+	mp.Set(
+		protoreflect.ValueOfString("k").MapKey(),
+		protoreflect.ValueOfString("\xff\xfe"), // invalid UTF-8
+	)
+	if got := scoreMessage(msg); got != -1 {
+		t.Errorf("scoreMessage with invalid UTF-8 in map value = %d, want -1", got)
 	}
 }
 

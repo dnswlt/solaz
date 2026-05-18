@@ -114,6 +114,12 @@ func (r *ProtoRegistry) MessageNames() []string {
 func collectMessageNames(msgs protoreflect.MessageDescriptors, out *[]string) {
 	for i := 0; i < msgs.Len(); i++ {
 		md := msgs.Get(i)
+		// Skip synthetic MapEntry messages: they're an implementation
+		// detail of map<K,V> fields, not types users would address by
+		// name or want to see in inference results.
+		if md.IsMapEntry() {
+			continue
+		}
 		*out = append(*out, string(md.FullName()))
 		collectMessageNames(md.Messages(), out)
 	}
@@ -217,7 +223,18 @@ func scoreMessage(msg protoreflect.Message) int {
 
 		switch fd.Kind() {
 		case protoreflect.MessageKind:
-			if fd.IsList() {
+			// Maps are also reported as MessageKind (their entries are a
+			// synthetic MapEntry submessage), but val holds a Map, not a
+			// Message — calling val.Message() on it would panic.
+			switch {
+			case fd.IsMap():
+				sub := scoreMapField(fd, val.Map())
+				if sub < 0 {
+					invalid = true
+					return false
+				}
+				score += sub
+			case fd.IsList():
 				list := val.List()
 				for i := 0; i < list.Len(); i++ {
 					subScore := scoreMessage(list.Get(i).Message())
@@ -227,7 +244,7 @@ func scoreMessage(msg protoreflect.Message) int {
 					}
 					score += subScore * 2
 				}
-			} else {
+			default:
 				subScore := scoreMessage(val.Message())
 				if subScore < 0 {
 					invalid = true
@@ -265,5 +282,49 @@ func scoreMessage(msg protoreflect.Message) int {
 		return -1
 	}
 
+	return score
+}
+
+// scoreMapField returns the score contribution of a populated map field
+// (the parent's +1 base for the field itself is added by scoreMessage).
+// String keys and string values are checked for valid UTF-8; map values
+// of message kind are recursively scored with the same *2 nesting
+// multiplier used for repeated messages; known enum values get the usual
+// +2 bonus. Returns -1 if any entry disqualifies the parent.
+func scoreMapField(fd protoreflect.FieldDescriptor, m protoreflect.Map) int {
+	keyFd := fd.MapKey()
+	valFd := fd.MapValue()
+	keyIsString := keyFd.Kind() == protoreflect.StringKind
+
+	score := 0
+	invalid := false
+	m.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
+		if keyIsString && !utf8.ValidString(k.String()) {
+			invalid = true
+			return false
+		}
+		switch valFd.Kind() {
+		case protoreflect.MessageKind:
+			sub := scoreMessage(v.Message())
+			if sub < 0 {
+				invalid = true
+				return false
+			}
+			score += sub * 2
+		case protoreflect.StringKind:
+			if !utf8.ValidString(v.String()) {
+				invalid = true
+				return false
+			}
+		case protoreflect.EnumKind:
+			if valFd.Enum().Values().ByNumber(v.Enum()) != nil {
+				score += 2
+			}
+		}
+		return true
+	})
+	if invalid {
+		return -1
+	}
 	return score
 }
