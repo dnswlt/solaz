@@ -25,15 +25,29 @@ type Config struct {
 	Profiles []Profile `json:"profiles"`
 }
 
+// Authentication scheme identifiers used in Profile.AuthScheme.
+const (
+	AuthSchemeClientCert = "client_cert"
+	AuthSchemeBasic      = "basic"
+)
+
 // Profile holds the connection settings for a single Solace broker.
 type Profile struct {
-	Name               string   `json:"name"`                 // unique within the config
-	Host               string   `json:"host"`                 // e.g. "tcps://broker.example.com:55443"
-	VPN                string   `json:"vpn"`                  // message VPN name
+	Name string `json:"name"` // unique within the config
+	Host string `json:"host"` // e.g. "tcps://broker.example.com:55443"
+	VPN  string `json:"vpn"`  // message VPN name
+	// AuthScheme selects how to authenticate to the broker. Supported
+	// values: "client_cert", "basic". If empty, the scheme is derived
+	// from which auth-specific fields are populated; an ambiguous
+	// combination (or no auth fields at all) requires this to be set
+	// explicitly.
+	AuthScheme         string   `json:"auth_scheme"`
 	ClientCertFile     string   `json:"client_cert_file"`     // PEM-encoded client cert
 	ClientKeyFile      string   `json:"client_key_file"`      // PEM-encoded private key
 	ClientKeyPass      string   `json:"client_key_pass"`      // optional password for encrypted key
 	ClientCertUserName string   `json:"client_cert_username"` // optional username for client-certificate auth
+	BasicUsername      string   `json:"basic_username"`       // username for basic auth
+	BasicPassword      string   `json:"basic_password"`       // password for basic auth (use ${VAR} + .vars)
 	TrustStoreDir      string   `json:"trust_store_dir"`      // dir with CA certs to trust
 	ClientName         string   `json:"client_name"`          // optional client name
 	InsecureSkipVerify bool     `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
@@ -212,10 +226,57 @@ func SelectProfile(c *Config, name, configPath string) (*Profile, error) {
 }
 
 func ValidateProfile(p *Profile, configPath string) error {
-	if p.Host == "" || p.VPN == "" || p.ClientCertFile == "" || p.ClientKeyFile == "" {
-		return fmt.Errorf("%s: profile %q: host, vpn, client_cert_file and client_key_file are required", configPath, p.Name)
+	if p.Host == "" || p.VPN == "" {
+		return fmt.Errorf("%s: profile %q: host and vpn are required", configPath, p.Name)
+	}
+	scheme, err := resolveAuthScheme(p)
+	if err != nil {
+		return fmt.Errorf("%s: profile %q: %v", configPath, p.Name, err)
+	}
+	switch scheme {
+	case AuthSchemeClientCert:
+		if p.ClientCertFile == "" || p.ClientKeyFile == "" {
+			return fmt.Errorf("%s: profile %q: client_cert_file and client_key_file are required for auth_scheme=%s", configPath, p.Name, AuthSchemeClientCert)
+		}
+	case AuthSchemeBasic:
+		if p.BasicUsername == "" || p.BasicPassword == "" {
+			return fmt.Errorf("%s: profile %q: basic_username and basic_password are required for auth_scheme=%s", configPath, p.Name, AuthSchemeBasic)
+		}
 	}
 	return nil
+}
+
+// resolveAuthScheme returns the authentication scheme to use for p.
+// When AuthScheme is set explicitly it is validated and returned. When
+// it is empty the scheme is derived from which auth-specific fields
+// are populated: client-certificate fields imply client_cert, basic-
+// auth fields imply basic. Populating fields from both groups (or from
+// neither) is ambiguous and surfaces a clear error so the user sets
+// auth_scheme explicitly. Other validation (required-field presence)
+// happens in ValidateProfile.
+func resolveAuthScheme(p *Profile) (string, error) {
+	if p.AuthScheme != "" {
+		switch p.AuthScheme {
+		case AuthSchemeClientCert, AuthSchemeBasic:
+			return p.AuthScheme, nil
+		default:
+			return "", fmt.Errorf("unknown auth_scheme %q (valid: %s, %s)",
+				p.AuthScheme, AuthSchemeClientCert, AuthSchemeBasic)
+		}
+	}
+	certClaimed := p.ClientCertFile != "" || p.ClientKeyFile != "" ||
+		p.ClientKeyPass != "" || p.ClientCertUserName != ""
+	basicClaimed := p.BasicUsername != "" || p.BasicPassword != ""
+	switch {
+	case certClaimed && basicClaimed:
+		return "", errors.New("auth_scheme must be set: both client-certificate and basic-auth fields are populated")
+	case certClaimed:
+		return AuthSchemeClientCert, nil
+	case basicClaimed:
+		return AuthSchemeBasic, nil
+	default:
+		return "", errors.New("auth_scheme must be set: no auth fields populated")
+	}
 }
 
 // ExpandProfile substitutes ${var} / $var placeholders in every string
@@ -235,9 +296,11 @@ func ExpandProfile(p *Profile, vars map[string]string) error {
 		return ""
 	}
 	fields := []*string{
-		&p.Name, &p.Host, &p.VPN,
+		&p.Name, &p.Host, &p.VPN, &p.AuthScheme,
 		&p.ClientCertFile, &p.ClientKeyFile, &p.ClientKeyPass,
-		&p.ClientCertUserName, &p.TrustStoreDir, &p.ClientName,
+		&p.ClientCertUserName,
+		&p.BasicUsername, &p.BasicPassword,
+		&p.TrustStoreDir, &p.ClientName,
 	}
 	for _, f := range fields {
 		*f = os.Expand(*f, mapper)
@@ -268,18 +331,29 @@ func ProfileNames(c *Config) string {
 }
 
 func BuildService(p *Profile) (solacemsg.MessagingService, error) {
+	scheme, err := resolveAuthScheme(p)
+	if err != nil {
+		return nil, err
+	}
 	props := config.ServicePropertyMap{
-		config.TransportLayerPropertyHost:                          p.Host,
-		config.ServicePropertyVPNName:                              p.VPN,
-		config.AuthenticationPropertyScheme:                        config.AuthenticationSchemeClientCertificate,
-		config.AuthenticationPropertySchemeSSLClientCertFile:       p.ClientCertFile,
-		config.AuthenticationPropertySchemeSSLClientPrivateKeyFile: p.ClientKeyFile,
+		config.TransportLayerPropertyHost: p.Host,
+		config.ServicePropertyVPNName:     p.VPN,
 	}
-	if p.ClientKeyPass != "" {
-		props[config.AuthenticationPropertySchemeClientCertPrivateKeyFilePassword] = p.ClientKeyPass
-	}
-	if p.ClientCertUserName != "" {
-		props[config.AuthenticationPropertySchemeClientCertUserName] = p.ClientCertUserName
+	switch scheme {
+	case AuthSchemeClientCert:
+		props[config.AuthenticationPropertyScheme] = config.AuthenticationSchemeClientCertificate
+		props[config.AuthenticationPropertySchemeSSLClientCertFile] = p.ClientCertFile
+		props[config.AuthenticationPropertySchemeSSLClientPrivateKeyFile] = p.ClientKeyFile
+		if p.ClientKeyPass != "" {
+			props[config.AuthenticationPropertySchemeClientCertPrivateKeyFilePassword] = p.ClientKeyPass
+		}
+		if p.ClientCertUserName != "" {
+			props[config.AuthenticationPropertySchemeClientCertUserName] = p.ClientCertUserName
+		}
+	case AuthSchemeBasic:
+		props[config.AuthenticationPropertyScheme] = config.AuthenticationSchemeBasic
+		props[config.AuthenticationPropertySchemeBasicUserName] = p.BasicUsername
+		props[config.AuthenticationPropertySchemeBasicPassword] = p.BasicPassword
 	}
 	if p.TrustStoreDir != "" && !p.InsecureSkipVerify {
 		props[config.TransportLayerSecurityPropertyTrustStorePath] = p.TrustStoreDir

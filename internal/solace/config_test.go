@@ -102,6 +102,165 @@ func TestTypesPath(t *testing.T) {
 	}
 }
 
+func TestResolveAuthScheme(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile Profile
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "explicit client_cert",
+			profile: Profile{AuthScheme: AuthSchemeClientCert},
+			want:    AuthSchemeClientCert,
+		},
+		{
+			name:    "explicit basic",
+			profile: Profile{AuthScheme: AuthSchemeBasic},
+			want:    AuthSchemeBasic,
+		},
+		{
+			name:    "explicit unknown errors",
+			profile: Profile{AuthScheme: "kerberos"},
+			wantErr: true,
+		},
+		{
+			name:    "derived from cert file",
+			profile: Profile{ClientCertFile: "/etc/c.pem"},
+			want:    AuthSchemeClientCert,
+		},
+		{
+			name:    "derived from cert key alone (cert file missing) — ValidateProfile catches the gap",
+			profile: Profile{ClientKeyFile: "/etc/k.pem"},
+			want:    AuthSchemeClientCert,
+		},
+		{
+			name:    "derived from cert username alone",
+			profile: Profile{ClientCertUserName: "svc"},
+			want:    AuthSchemeClientCert,
+		},
+		{
+			name:    "derived from basic username",
+			profile: Profile{BasicUsername: "u"},
+			want:    AuthSchemeBasic,
+		},
+		{
+			name:    "derived from basic password alone — ValidateProfile catches the gap",
+			profile: Profile{BasicPassword: "p"},
+			want:    AuthSchemeBasic,
+		},
+		{
+			name:    "ambiguous: both cert and basic fields set",
+			profile: Profile{ClientCertFile: "/etc/c.pem", BasicUsername: "u"},
+			wantErr: true,
+		},
+		{
+			name:    "no auth fields populated",
+			profile: Profile{},
+			wantErr: true,
+		},
+		{
+			name:    "explicit overrides ambiguity",
+			profile: Profile{AuthScheme: AuthSchemeBasic, ClientCertFile: "/etc/c.pem", BasicUsername: "u"},
+			want:    AuthSchemeBasic,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveAuthScheme(&tc.profile)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got scheme %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("scheme = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateProfile(t *testing.T) {
+	base := func() Profile {
+		return Profile{Name: "p", Host: "tcps://broker:55443", VPN: "v"}
+	}
+	cases := []struct {
+		name    string
+		mutate  func(p *Profile)
+		wantErr bool
+	}{
+		{
+			name: "client_cert: cert + key satisfy",
+			mutate: func(p *Profile) {
+				p.ClientCertFile = "/etc/c.pem"
+				p.ClientKeyFile = "/etc/k.pem"
+			},
+		},
+		{
+			name: "client_cert: missing key errors",
+			mutate: func(p *Profile) {
+				p.ClientCertFile = "/etc/c.pem"
+			},
+			wantErr: true,
+		},
+		{
+			name: "basic: username + password satisfy",
+			mutate: func(p *Profile) {
+				p.BasicUsername = "u"
+				p.BasicPassword = "p"
+			},
+		},
+		{
+			name: "basic: missing password errors",
+			mutate: func(p *Profile) {
+				p.BasicUsername = "u"
+			},
+			wantErr: true,
+		},
+		{
+			name: "explicit basic respects fields even with cert fields present",
+			mutate: func(p *Profile) {
+				p.AuthScheme = AuthSchemeBasic
+				p.BasicUsername = "u"
+				p.BasicPassword = "p"
+				p.ClientCertFile = "/etc/c.pem" // ignored when scheme is explicit
+			},
+		},
+		{
+			name:    "host missing",
+			mutate:  func(p *Profile) { p.Host = "" },
+			wantErr: true,
+		},
+		{
+			name:    "vpn missing",
+			mutate:  func(p *Profile) { p.VPN = "" },
+			wantErr: true,
+		},
+		{
+			name:    "no auth fields at all errors",
+			mutate:  func(p *Profile) {},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base()
+			tc.mutate(&p)
+			err := ValidateProfile(&p, "test.conf")
+			if tc.wantErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestWriteTypesFile(t *testing.T) {
 	t.Run("creates file when missing", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "new.types")

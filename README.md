@@ -224,15 +224,24 @@ Example `~/.solaz.conf`:
 }
 ```
 
-Required fields: `name`, `host`, `vpn`, `client_cert_file`, `client_key_file`.
+Required fields: `name`, `host`, `vpn`, plus the credentials for the
+chosen `auth_scheme` (see below).
 
 Optional fields:
 
+- `auth_scheme` — `client_cert` (default, client-certificate auth) or
+  `basic` (username/password). When omitted, the scheme is derived from
+  which fields are populated; set it explicitly to disambiguate when
+  fields from both schemes are present.
 - `client_key_pass` — password for an encrypted private key.
 - `client_cert_username` — Solace VPN username to authenticate as. Omit to
   let the broker derive it from the cert (typically the CN, per its
   certificate-matching rule). Set this when the broker requires an
   explicit username that doesn't match what it would extract.
+- `basic_username`, `basic_password` — credentials for `auth_scheme=basic`.
+  Don't inline the password; expand it from the environment via
+  `"basic_password": "${SOLAZ_BROKER_PW}"` and supply the value through a
+  gitignored `.vars` companion file or `--var`.
 - `trust_store_dir` — directory of CA certs in OpenSSL hashed-directory
   format, used to validate the broker's server certificate. See
   [Populating the trust store](#populating-the-trust-store). Ignored when
