@@ -38,6 +38,7 @@ type Profile struct {
 	ClientName         string   `json:"client_name"`          // optional client name
 	InsecureSkipVerify bool     `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
 	ProtoPaths         []string `json:"proto_paths"`          // paths to search for .proto files
+	ProtoPathsIsolated bool     `json:"proto_paths_isolated"` // compile each proto_paths entry independently; no cross-root imports
 
 	// TopicTypes maps a Solace topic subscription pattern (with `*` as
 	// a single-level wildcard or a prefix wildcard within a level — e.g.

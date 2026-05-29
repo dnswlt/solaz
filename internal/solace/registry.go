@@ -38,7 +38,17 @@ type ProtoRegistry struct {
 // Missing paths are skipped with a debug log so that a stale directory
 // in a profile doesn't break the whole tool. Other errors
 // (permission denied, unreadable files, ...) still surface.
-func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
+//
+// When isolated is false, every path joins one shared import-path list
+// and one compile pass — files in any root can `import` files from any
+// other root. When isolated is true, each path is compiled in its own
+// pass with only itself on the import-path list; cross-root imports are
+// no longer reachable and must be resolved within their own root (plus
+// the standard well-known types and the protobuf global registry
+// fallback). All resulting descriptors are merged into one registry, so
+// duplicate file paths or duplicate message names across roots still
+// fail at registration regardless of mode.
+func NewProtoRegistry(paths []string, isolated bool) (*ProtoRegistry, error) {
 	existing := make([]string, 0, len(paths))
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
@@ -51,14 +61,38 @@ func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
 		existing = append(existing, p)
 	}
 
+	reg := &protoregistry.Files{}
+	if len(existing) == 0 {
+		return &ProtoRegistry{Files: reg}, nil
+	}
+
+	if isolated {
+		for _, p := range existing {
+			if err := compileInto(reg, []string{p}); err != nil {
+				return nil, fmt.Errorf("proto_paths %s: %w", p, err)
+			}
+		}
+	} else {
+		if err := compileInto(reg, existing); err != nil {
+			return nil, err
+		}
+	}
+
+	return &ProtoRegistry{Files: reg}, nil
+}
+
+// compileInto walks every importPath for .proto files (relative to its
+// own root), compiles them with importPaths as the resolver's search
+// list, and registers the resulting descriptors into reg. Used by both
+// the merged and the isolated compilation modes of NewProtoRegistry.
+func compileInto(reg *protoregistry.Files, importPaths []string) error {
 	var protoFiles []string
-	for _, p := range existing {
+	for _, p := range importPaths {
 		err := filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 			if !info.IsDir() && strings.HasSuffix(info.Name(), ".proto") {
-				// We need the path relative to the import roots for the compiler
 				rel, err := filepath.Rel(p, path)
 				if err != nil {
 					return err
@@ -68,16 +102,16 @@ func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("walk %s: %w", p, err)
+			return fmt.Errorf("walk %s: %w", p, err)
 		}
 	}
 
 	if len(protoFiles) == 0 {
-		return &ProtoRegistry{Files: &protoregistry.Files{}}, nil
+		return nil
 	}
 
 	baseResolver := protocompile.WithStandardImports(&protocompile.SourceResolver{
-		ImportPaths: existing,
+		ImportPaths: importPaths,
 	})
 
 	compiler := protocompile.Compiler{
@@ -86,17 +120,15 @@ func NewProtoRegistry(paths []string) (*ProtoRegistry, error) {
 
 	files, err := compiler.Compile(context.Background(), protoFiles...)
 	if err != nil {
-		return nil, fmt.Errorf("compile: %w", err)
+		return fmt.Errorf("compile: %w", err)
 	}
 
-	reg := &protoregistry.Files{}
 	for _, f := range files {
 		if err := reg.RegisterFile(f); err != nil {
-			return nil, fmt.Errorf("register %s: %w", f.Path(), err)
+			return fmt.Errorf("register %s: %w", f.Path(), err)
 		}
 	}
-
-	return &ProtoRegistry{Files: reg}, nil
+	return nil
 }
 
 // MessageNames returns the fully-qualified names of every message type in
