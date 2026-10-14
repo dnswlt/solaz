@@ -61,7 +61,7 @@ type Profile struct {
 	// `print` command matches each message's concrete destination
 	// against these patterns; the most specific match wins. An entry
 	// here takes precedence over the message's application_message_type
-	// header, but is overridden by an explicit --type flag.
+	// header, but is overridden by an explicit --proto-type flag.
 	TopicTypes map[string]string `json:"topic_types"`
 }
 

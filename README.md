@@ -33,9 +33,11 @@ solaz <command> [flags]
   on the message's `Content-Type` (and explicit overrides):
   - `--raw` set → write raw payload bytes to stdout unchanged, bypassing
     content-type dispatch.
-  - `--type` set → always decode as protobuf with that type.
+  - `--proto-type` set → always decode as protobuf with that type.
   - JSON content type (`application/json`, `text/json`, or any `+json`
     structured-suffix type) → compact onto a single line and print as-is.
+  - No protobuf content type, and the payload is a valid JSON object or
+    array → treated as JSON, same as above.
   - Protobuf content type (`application/x-protobuf`,
     `application/vnd.google.protobuf`, `application/protobuf`), or any
     proto hint (matching `topic_types` entry, or an
@@ -49,7 +51,7 @@ solaz <command> [flags]
   messages.
 - `types`   — list all protobuf message types known to the proto registry
   (compiled from `proto_paths`). Does not connect to a broker; useful for
-  discovering the right value to pass to `--type`.
+  discovering the right value to pass to `--proto-type`.
 - `learn-types` — for each subscribed topic, narrow down the protobuf
   message type carried on it by intersecting the candidate sets from
   successive messages, and print one `topic=type` line per resolved
@@ -72,14 +74,14 @@ Flags common to all commands:
 - `--max-runtime DUR` — max total time spent receiving; `0` disables
   (default `0`).
 - `--var KEY=VALUE` — template variable for profile expansion (repeatable).
-- `--type FQNAME` — protobuf message type for `print`; overrides the
+- `--proto-type FQNAME` — protobuf message type for `print`; overrides the
   per-message hint.
 
 Per-command flags:
 
 - `print`: `--count N` (default `1`) — number of messages to print.
   `--raw` — emit raw payload bytes, bypassing content-type dispatch
-  (mutually exclusive with `--type`).
+  (mutually exclusive with `--proto-type`).
   `--envelope` — emit one `{headers, payload, payloadEncoding, ...}` JSON
   object per message (see [Envelope mode](#envelope-mode)).
   `--infer` — heuristically infer the protobuf message type when
@@ -102,7 +104,7 @@ solaz headers --topic 'foo/>'
 solaz stats --topic 'foo/>' --count 1000 --max-runtime 2m
 
 # Print 5 payloads as JSON, forcing a specific proto type
-solaz print --topic 'a/b/*' --count 5 --type com.example.MyMessage
+solaz print --topic 'a/b/*' --count 5 --proto-type com.example.MyMessage
 
 # Subscribe to multiple topics at once
 solaz stats --topic 'foo/>' --topic 'bar/baz/*'
@@ -167,17 +169,17 @@ Schema:
 
 - `headers` — every set header field, named as in the tabular `headers`
   mode. JSON key order is alphabetical.
-- `payload` — the decoded JSON value (from a JSON content type or a
+- `payload` — the decoded JSON value (from a JSON payload or a
   protobuf decode), or a base64-encoded string of the raw bytes.
 - `payloadEncoding` — `"json"` or `"base64"`, so consumers don't have to
   guess.
-- `payloadType` — fully-qualified protobuf message type used for
+- `protoType` — fully-qualified protobuf message type used for
   decoding; omitted for JSON or raw payloads.
 - `payloadError` — only present when a decode was attempted and failed
-  (e.g. `--type` set but the descriptor is missing); the original bytes
+  (e.g. `--proto-type` set but the descriptor is missing); the original bytes
   are still available under `payload` as base64.
 
-`--envelope` composes with `--type` (force-decode, base64 on failure) and
+`--envelope` composes with `--proto-type` (force-decode, base64 on failure) and
 `--raw` (always base64, no decode attempted).
 
 ```sh
@@ -262,7 +264,7 @@ Optional fields:
   `*` matching one level, `*` as a suffix to a level part acting as a
   prefix wildcard within that level — e.g. `d-*` matches `d-anything` —
   and `>` matching one or more trailing levels) to a fully-qualified
-  protobuf message type. When `--type` is not set,
+  protobuf message type. When `--proto-type` is not set,
   the `print` command matches each message's concrete destination
   against these patterns to pick a type; the most specific match wins
   (more literal segments first, then more segments overall), and an
@@ -283,7 +285,7 @@ Optional fields:
   ```
 
   A `topic_types` match takes precedence over the message's
-  `application_message_type` header. `--type`, when set, overrides
+  `application_message_type` header. `--proto-type`, when set, overrides
   everything.
 
 ### Templated profiles

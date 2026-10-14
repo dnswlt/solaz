@@ -31,7 +31,7 @@ type ReceiveOptions struct {
 	Timeout       time.Duration
 	MaxRuntime    time.Duration
 	Registry      *ProtoRegistry
-	MessageType   string
+	ProtoType     string
 	TopicTypes    map[string]string
 	Mode          string
 	Count         int
@@ -135,12 +135,12 @@ func newHandler(opts ReceiveOptions) (messageHandler, error) {
 		return &headersHandler{}, nil
 	case "print":
 		return &payloadHandler{
-			registry:    opts.Registry,
-			messageType: opts.MessageType,
-			topicIndex:  newTopicTypeIndex(opts.TopicTypes),
-			raw:         opts.Raw,
-			envelope:    opts.Envelope,
-			inferType:   opts.InferType,
+			registry:   opts.Registry,
+			protoType:  opts.ProtoType,
+			topicIndex: newTopicTypeIndex(opts.TopicTypes),
+			raw:        opts.Raw,
+			envelope:   opts.Envelope,
+			inferType:  opts.InferType,
 		}, nil
 	case "stats":
 		return &statsHandler{topics: make(map[string]*topicStats)}, nil
@@ -222,25 +222,25 @@ func (h *headersHandler) handle(msg message.InboundMessage) error {
 func (h *headersHandler) finish() error { return nil }
 
 type payloadHandler struct {
-	registry    *ProtoRegistry
-	messageType string
-	topicIndex  *topicTypeIndex
-	raw         bool
-	envelope    bool
-	inferType   bool
+	registry   *ProtoRegistry
+	protoType  string
+	topicIndex *topicTypeIndex
+	raw        bool
+	envelope   bool
+	inferType  bool
 }
 
 // envelope is the JSON record emitted in --envelope mode. The Payload
 // field is either a json.RawMessage (when the payload was successfully
 // decoded as JSON or protobuf) or a base64-encoded string (raw bytes or
 // failed decode). PayloadEncoding tells the consumer which it got.
-// PayloadType is the fully-qualified protobuf message type used for
+// ProtoType is the fully-qualified protobuf message type used for
 // decoding; empty for JSON or raw payloads.
 type envelope struct {
 	Headers         map[string]any `json:"headers"`
 	Payload         any            `json:"payload"`
 	PayloadEncoding string         `json:"payloadEncoding"`
-	PayloadType     string         `json:"payloadType,omitempty"`
+	ProtoType       string         `json:"protoType,omitempty"`
 	PayloadError    string         `json:"payloadError,omitempty"`
 }
 
@@ -279,13 +279,22 @@ func (h *payloadHandler) decode(msg message.InboundMessage, payload []byte, ct s
 		// --raw is an explicit override — bypass content-type dispatch.
 		return nil, "", nil
 	}
-	if h.messageType != "" {
-		// --type is an explicit override — always decode as protobuf.
-		return h.decodeProto(msg, payload, h.messageType)
+	if h.protoType != "" {
+		// --proto-type is an explicit override — always decode as protobuf.
+		return h.decodeProto(msg, payload, h.protoType)
 	}
 	if isJSONContentType(ct) {
 		v, err := compactJSON(payload, ct)
 		return v, "", err
+	}
+	// Unlabelled JSON: sniff before the proto hints so JSON topics never
+	// pay for a failing proto decode (or --infer), and so a logical
+	// application_message_type on a JSON body doesn't force protobuf.
+	if !isProtobufContentType(ct) {
+		if v := sniffJSON(payload); v != nil {
+			trace.Debugf("%s: payload sniffed as JSON", msg.GetDestinationName())
+			return v, "", nil
+		}
 	}
 	msgType, hasHint, err := h.resolveProtoHint(msg)
 	if err != nil {
@@ -331,9 +340,26 @@ func compactJSON(payload []byte, ct string) (json.RawMessage, error) {
 	return buf.Bytes(), nil
 }
 
+// sniffJSON returns payload compacted onto a single line if it is a JSON
+// object or array, else nil. Bare scalars are rejected so plain-text
+// payloads like "42" stay raw. The first-byte check rejects binary
+// payloads (protobuf essentially never starts with '{' or '[') before
+// any parsing.
+func sniffJSON(payload []byte) json.RawMessage {
+	b := bytes.TrimLeft(payload, " \t\r\n")
+	if len(b) == 0 || (b[0] != '{' && b[0] != '[') {
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, payload); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
 // decodeProto unmarshals payload using the named protobuf type and
 // returns the result as single-line JSON along with the resolved type
-// name. msgType must already be resolved by the caller (`--type`,
+// name. msgType must already be resolved by the caller (`--proto-type`,
 // content-type dispatch, or resolveProtoHint); an empty msgType yields
 // a clear "unknown type" error so every caller routes through this
 // single function. The returned type is set whenever a type was
@@ -345,7 +371,7 @@ func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte,
 	}
 	if msgType == "" {
 		if !h.inferType {
-			return nil, "", fmt.Errorf("message type is unknown for topic %q (use --type, --infer, or configure topic_types in the profile)", msg.GetDestinationName())
+			return nil, "", fmt.Errorf("message type is unknown for topic %q (use --proto-type, --infer, or configure topic_types in the profile)", msg.GetDestinationName())
 		}
 		started := time.Now()
 		candidates, err := h.registry.InferMessageType(payload)
@@ -392,8 +418,8 @@ func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte,
 // consumer which type was attempted.
 func (h *payloadHandler) emitEnvelope(msg message.InboundMessage, payload []byte, value json.RawMessage, protoType string, decodeErr error) error {
 	env := envelope{
-		Headers:     collectPayloadHeaders(msg, payload),
-		PayloadType: protoType,
+		Headers:   collectPayloadHeaders(msg, payload),
+		ProtoType: protoType,
 	}
 	if value != nil && decodeErr == nil {
 		env.Payload = value
@@ -590,7 +616,7 @@ func (h *learnHandler) handle(msg message.InboundMessage) error {
 		return nil
 	}
 	ct, _ := msg.GetHTTPContentType()
-	if isJSONContentType(ct) {
+	if isJSONContentType(ct) || (!isProtobufContentType(ct) && sniffJSON(payload) != nil) {
 		return nil
 	}
 	candidates, err := h.registry.InferMessageType(payload)

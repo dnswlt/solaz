@@ -228,7 +228,7 @@ func runPrint(args []string) {
 	var (
 		configPath, profileName       string
 		timeout, maxRuntime           time.Duration
-		msgType                       string
+		protoType                     string
 		count                         int
 		verbose, raw, envelope, infer bool
 		vars                          = &varsFlag{}
@@ -239,11 +239,11 @@ func runPrint(args []string) {
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
 	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
 	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
-	fs.StringVar(&msgType, "type", "", "protobuf message type to use for decoding")
+	fs.StringVar(&protoType, "proto-type", "", "protobuf message type to use for decoding")
 	fs.IntVar(&count, "count", 1, "number of messages to print")
 	fs.BoolVar(&raw, "raw", false, "write payloads to stdout as raw bytes, bypassing content-type decoding")
 	fs.BoolVar(&envelope, "envelope", false, "emit {headers, payload, payloadEncoding, ...} JSON envelopes; every message produces one record")
-	fs.BoolVar(&infer, "infer", false, "heuristically infer the protobuf message type when no --type, topic_types, or application_message_type is set")
+	fs.BoolVar(&infer, "infer", false, "heuristically infer the protobuf message type when no --proto-type, topic_types, or application_message_type is set")
 	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
@@ -255,14 +255,14 @@ func runPrint(args []string) {
 	if len(topics) == 0 {
 		fatalf("--topic is required")
 	}
-	if raw && msgType != "" {
-		fatalf("--raw and --type are mutually exclusive")
+	if raw && protoType != "" {
+		fatalf("--raw and --proto-type are mutually exclusive")
 	}
 	if infer && raw {
 		fatalf("--infer and --raw are mutually exclusive")
 	}
-	if infer && msgType != "" {
-		fatalf("--infer and --type are mutually exclusive")
+	if infer && protoType != "" {
+		fatalf("--infer and --proto-type are mutually exclusive")
 	}
 	profile, _ := loadProfile(configPath, profileName, vars.m, true)
 	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
@@ -281,17 +281,17 @@ func runPrint(args []string) {
 	}
 
 	runReceive(profile, solace.ReceiveOptions{
-		Topics:      topics,
-		Timeout:     timeout,
-		MaxRuntime:  maxRuntime,
-		Registry:    registry,
-		MessageType: msgType,
-		TopicTypes:  profile.TopicTypes,
-		Mode:        "print",
-		Count:       count,
-		Raw:         raw,
-		Envelope:    envelope,
-		InferType:   infer,
+		Topics:     topics,
+		Timeout:    timeout,
+		MaxRuntime: maxRuntime,
+		Registry:   registry,
+		ProtoType:  protoType,
+		TopicTypes: profile.TopicTypes,
+		Mode:       "print",
+		Count:      count,
+		Raw:        raw,
+		Envelope:   envelope,
+		InferType:  infer,
 	})
 }
 

@@ -30,6 +30,36 @@ func TestIsJSONContentType(t *testing.T) {
 	}
 }
 
+func TestSniffJSON(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		want    string // "" means not sniffed as JSON
+	}{
+		{"object", `{"a": 1}`, `{"a":1}`},
+		{"array", `[1, 2]`, `[1,2]`},
+		{"leading whitespace", " \n\t{\"a\":1}\n", `{"a":1}`},
+		{"multi-line", "{\n  \"a\": [\n    1\n  ]\n}", `{"a":[1]}`},
+
+		{"empty", ``, ""},
+		{"whitespace only", "  \n", ""},
+		{"number scalar", `42`, ""},
+		{"string scalar", `"x"`, ""},
+		{"bool scalar", `true`, ""},
+		{"truncated object", `{"a":`, ""},
+		{"brace then garbage", `{abc`, ""},
+		{"plain text", `hello`, ""},
+		{"protobuf", "\x0a\x03foo\x10\x2a", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := string(sniffJSON([]byte(c.payload))); got != c.want {
+				t.Errorf("sniffJSON(%q) = %q, want %q", c.payload, got, c.want)
+			}
+		})
+	}
+}
+
 func TestIsProtobufContentType(t *testing.T) {
 	cases := []struct {
 		ct   string
