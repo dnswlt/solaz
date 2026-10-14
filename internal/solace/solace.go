@@ -28,13 +28,13 @@ import (
 // ReceiveOptions bundles the parameters for receiving a message.
 type ReceiveOptions struct {
 	Topics        []string
-	Timeout       time.Duration
-	MaxRuntime    time.Duration
+	IdleTimeout   time.Duration // max wait for the next message; 0 waits indefinitely
+	Duration      time.Duration // total receive time; 0 disables
 	Registry      *ProtoRegistry
 	ProtoType     string
 	TopicTypes    map[string]string
 	Mode          string
-	Count         int
+	Count         int    // messages to receive; 0 means no limit
 	Raw           bool   // print mode: emit raw bytes, skip content-type dispatch
 	Envelope      bool   // print mode: emit {headers, payload, ...} JSON envelope
 	InferType     bool   // print mode: heuristically infer proto type when unknown
@@ -75,8 +75,8 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 	if err := receiver.Start(); err != nil {
 		return fmt.Errorf("start receiver: %w", err)
 	}
-	trace.Debugf("subscribed to %s; awaiting up to %d messages (per-msg timeout=%s, max-runtime=%s)",
-		strings.Join(opts.Topics, ","), opts.Count, opts.Timeout, opts.MaxRuntime)
+	trace.Debugf("subscribed to %s (count=%d, idle-timeout=%s, duration=%s; 0 = no limit)",
+		strings.Join(opts.Topics, ","), opts.Count, opts.IdleTimeout, opts.Duration)
 	defer func() {
 		err := receiver.Terminate(1 * time.Second)
 		var incomplete *solace.IncompleteMessageDeliveryError
@@ -86,19 +86,25 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 	}()
 
 	var deadline time.Time
-	if opts.MaxRuntime > 0 {
-		deadline = time.Now().Add(opts.MaxRuntime)
+	if opts.Duration > 0 {
+		deadline = time.Now().Add(opts.Duration)
 	}
 
 	var received, warnings int
-	for i := 0; i < opts.Count; i++ {
-		timeout := opts.Timeout
+	// Count 0 means no message limit; IdleTimeout 0 means wait indefinitely
+	// for each message (the SDK's negative timeout), bounded only by the
+	// Duration deadline if one is set.
+	for i := 0; opts.Count == 0 || i < opts.Count; i++ {
+		timeout := opts.IdleTimeout
+		if timeout == 0 {
+			timeout = -1
+		}
 		if !deadline.IsZero() {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				break
 			}
-			if remaining < timeout {
+			if timeout < 0 || remaining < timeout {
 				timeout = remaining
 			}
 		}

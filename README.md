@@ -72,10 +72,10 @@ Flags common to all commands:
 - `--profile NAME` — profile from the config file (defaults to the first
   entry).
 - `--config PATH` — config file path (default `~/.solaz.conf`).
-- `--timeout DUR` — max wait for a single message before erroring out
-  (default `30s`).
-- `--max-runtime DUR` — max total time spent receiving; `0` disables
-  (default `0`).
+- `--duration DUR` — total time to receive messages before stopping; `0`
+  disables (default `0`).
+- `--idle-timeout DUR` — max wait for the next message before erroring
+  out; `0` waits indefinitely (default `30s`, or `0` with `--duration`).
 - `--var KEY=VALUE` — template variable for profile expansion (repeatable).
 - `--proto-type FQNAME` — protobuf message type for `print`; overrides the
   per-message hint.
@@ -94,8 +94,14 @@ Per-command flags:
   mappings into the companion `.types` file rather than only printing
   them.
 
-The loop stops when `--count` is reached *or* `--max-runtime` elapses,
-whichever comes first.
+The loop stops when `--count` is reached *or* `--duration` elapses,
+whichever comes first. `--count 0` means no limit. With `--duration`
+set, `--count` and `--idle-timeout` default to `0`, so a time-bounded run
+needs nothing else:
+
+```sh
+solaz stats --topic 'trades/>' --duration 10m
+```
 
 ### Examples
 
@@ -104,7 +110,7 @@ whichever comes first.
 solaz headers --topic 'foo/>'
 
 # Aggregate up to 1000 messages or 2 minutes, whichever first
-solaz stats --topic 'foo/>' --count 1000 --max-runtime 2m
+solaz stats --topic 'foo/>' --count 1000 --duration 2m
 
 # Print 5 payloads as JSON, forcing a specific proto type
 solaz print --topic 'a/b/*' --count 5 --proto-type com.example.MyMessage
@@ -113,7 +119,7 @@ solaz print --topic 'a/b/*' --count 5 --proto-type com.example.MyMessage
 solaz stats --topic 'foo/>' --topic 'bar/baz/*'
 
 # Use a named profile and a longer custom receive timeout
-solaz print --topic 'x/>' --profile prod --timeout 1m
+solaz print --topic 'x/>' --profile prod --idle-timeout 1m
 
 # List every protobuf message type the registry knows about
 solaz types --profile prod
@@ -137,7 +143,7 @@ they are merged into a companion `.types` file (default `~/.solaz.types`).
 solaz learn-types --topic 'trades/orders/>' --profile prod
 
 # Same, but persist so future runs pick it up automatically
-solaz learn-types --topic 'trades/>' --save --max-runtime 5m
+solaz learn-types --topic 'trades/>' --save --duration 5m
 ```
 
 The `.types` file is auto-consulted by every command. Its format mirrors

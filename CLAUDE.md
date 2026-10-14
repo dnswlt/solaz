@@ -119,8 +119,8 @@ principle 2). Raw `fmt.Fprintf(os.Stderr, ...)` should not appear outside
 
 - Error messages: lowercase, no trailing punctuation, lead with the
   context (`fatalf("profile %q: %v", ...)` rather than `"Error: ..."`).
-- Flag names: long form only, hyphenated (`--max-runtime`, not
-  `--maxruntime`). Match `README.md`'s flag table.
+- Flag names: long form only, hyphenated (`--idle-timeout`, not
+  `--idletimeout`). Match `README.md`'s flag table.
 - Help output: terse. The existing `usage` constant is the model — one
   line per command, no decoration.
 - No emoji. No colors. No spinners. No interactive prompts.

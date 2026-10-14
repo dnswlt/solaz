@@ -178,6 +178,31 @@ func loadProfile(configPath, profileName string, vars map[string]string, validat
 	return profile, configPath
 }
 
+// applyRunLimits resolves --count and --idle-timeout against --duration.
+// When --duration is set, the run is time-bounded: --count and
+// --idle-timeout default to 0 (no limit) unless passed explicitly, so a
+// long run doesn't need a huge --count or abort on a quiet topic. count
+// is nil for commands without a --count flag.
+func applyRunLimits(fs *flag.FlagSet, duration time.Duration, count *int, idleTimeout *time.Duration) {
+	if count != nil && *count < 0 {
+		fatalf("--count must be >= 0")
+	}
+	if *idleTimeout < 0 {
+		fatalf("--idle-timeout must be >= 0")
+	}
+	if duration <= 0 {
+		return
+	}
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if count != nil && !explicit["count"] {
+		*count = 0
+	}
+	if !explicit["idle-timeout"] {
+		*idleTimeout = 0
+	}
+}
+
 // runReceive builds a messaging service for the profile and runs the
 // receive loop with the supplied options.
 func runReceive(profile *solace.Profile, opts solace.ReceiveOptions) {
@@ -196,7 +221,7 @@ func runReceive(profile *solace.Profile, opts solace.ReceiveOptions) {
 func runHeaders(args []string) {
 	var (
 		configPath, profileName string
-		timeout, maxRuntime     time.Duration
+		idleTimeout, duration   time.Duration
 		verbose                 bool
 		vars                    = &varsFlag{}
 		topics                  stringListFlag
@@ -204,14 +229,15 @@ func runHeaders(args []string) {
 	fs := flag.NewFlagSet("headers", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
-	fs.DurationVar(&timeout, "timeout", 60*time.Second, "max time to wait for a single message")
-	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
+	fs.DurationVar(&idleTimeout, "idle-timeout", 30*time.Second, "max time to wait for the next message; 0 waits indefinitely (implied by --duration)")
+	fs.DurationVar(&duration, "duration", 0, "total time to receive messages before stopping (0 disables)")
 	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
 	fs.Parse(args)
 	trace.SetVerbose(verbose)
+	applyRunLimits(fs, duration, nil, &idleTimeout)
 
 	if len(topics) == 0 {
 		fatalf("--topic is required")
@@ -219,18 +245,18 @@ func runHeaders(args []string) {
 	profile, _ := loadProfile(configPath, profileName, vars.m, true)
 
 	runReceive(profile, solace.ReceiveOptions{
-		Topics:     topics,
-		Timeout:    timeout,
-		MaxRuntime: maxRuntime,
-		Mode:       "headers",
-		Count:      1,
+		Topics:      topics,
+		IdleTimeout: idleTimeout,
+		Duration:    duration,
+		Mode:        "headers",
+		Count:       1,
 	})
 }
 
 func runPrint(args []string) {
 	var (
 		configPath, profileName       string
-		timeout, maxRuntime           time.Duration
+		idleTimeout, duration         time.Duration
 		protoType                     string
 		count                         int
 		verbose, raw, envelope, infer bool
@@ -240,10 +266,10 @@ func runPrint(args []string) {
 	fs := flag.NewFlagSet("print", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
-	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
-	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
+	fs.DurationVar(&idleTimeout, "idle-timeout", 30*time.Second, "max time to wait for the next message; 0 waits indefinitely (implied by --duration)")
+	fs.DurationVar(&duration, "duration", 0, "total time to receive messages before stopping (0 disables)")
 	fs.StringVar(&protoType, "proto-type", "", "protobuf message type to use for decoding")
-	fs.IntVar(&count, "count", 1, "number of messages to print")
+	fs.IntVar(&count, "count", 1, "number of messages to print; 0 means no limit (implied by --duration)")
 	fs.BoolVar(&raw, "raw", false, "write payloads to stdout as raw bytes, bypassing content-type decoding")
 	fs.BoolVar(&envelope, "envelope", false, "emit {headers, payload, payloadEncoding, ...} JSON envelopes; every message produces one record")
 	fs.BoolVar(&infer, "infer", false, "heuristically infer the protobuf message type when no --proto-type, topic_types, or application_message_type is set")
@@ -254,6 +280,7 @@ func runPrint(args []string) {
 	fs.Var(&protoPaths, "proto-path", "additional path to search for .proto files (may be repeated)")
 	fs.Parse(args)
 	trace.SetVerbose(verbose)
+	applyRunLimits(fs, duration, &count, &idleTimeout)
 
 	if len(topics) == 0 {
 		fatalf("--topic is required")
@@ -284,24 +311,24 @@ func runPrint(args []string) {
 	}
 
 	runReceive(profile, solace.ReceiveOptions{
-		Topics:     topics,
-		Timeout:    timeout,
-		MaxRuntime: maxRuntime,
-		Registry:   registry,
-		ProtoType:  protoType,
-		TopicTypes: profile.TopicTypes,
-		Mode:       "print",
-		Count:      count,
-		Raw:        raw,
-		Envelope:   envelope,
-		InferType:  infer,
+		Topics:      topics,
+		IdleTimeout: idleTimeout,
+		Duration:    duration,
+		Registry:    registry,
+		ProtoType:   protoType,
+		TopicTypes:  profile.TopicTypes,
+		Mode:        "print",
+		Count:       count,
+		Raw:         raw,
+		Envelope:    envelope,
+		InferType:   infer,
 	})
 }
 
 func runStats(args []string) {
 	var (
 		configPath, profileName string
-		timeout, maxRuntime     time.Duration
+		idleTimeout, duration   time.Duration
 		count                   int
 		verbose                 bool
 		vars                    = &varsFlag{}
@@ -310,15 +337,16 @@ func runStats(args []string) {
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
-	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
-	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
-	fs.IntVar(&count, "count", 100, "number of messages to aggregate")
+	fs.DurationVar(&idleTimeout, "idle-timeout", 30*time.Second, "max time to wait for the next message; 0 waits indefinitely (implied by --duration)")
+	fs.DurationVar(&duration, "duration", 0, "total time to receive messages before stopping (0 disables)")
+	fs.IntVar(&count, "count", 100, "number of messages to aggregate; 0 means no limit (implied by --duration)")
 	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
 	fs.Var(vars, "var", "template variable KEY=VALUE; may be repeated. Expands ${KEY} placeholders in profile fields")
 	fs.Var(&topics, "topic", "topic subscription pattern (required, may be repeated)")
 	fs.Parse(args)
 	trace.SetVerbose(verbose)
+	applyRunLimits(fs, duration, &count, &idleTimeout)
 
 	if len(topics) == 0 {
 		fatalf("--topic is required")
@@ -326,11 +354,11 @@ func runStats(args []string) {
 	profile, _ := loadProfile(configPath, profileName, vars.m, true)
 
 	runReceive(profile, solace.ReceiveOptions{
-		Topics:     topics,
-		Timeout:    timeout,
-		MaxRuntime: maxRuntime,
-		Mode:       "stats",
-		Count:      count,
+		Topics:      topics,
+		IdleTimeout: idleTimeout,
+		Duration:    duration,
+		Mode:        "stats",
+		Count:       count,
 	})
 }
 
@@ -407,7 +435,7 @@ func runProfiles(args []string) {
 func runLearnTypes(args []string) {
 	var (
 		configPath, profileName string
-		timeout, maxRuntime     time.Duration
+		idleTimeout, duration   time.Duration
 		count                   int
 		verbose, save           bool
 		vars                    = &varsFlag{}
@@ -416,9 +444,9 @@ func runLearnTypes(args []string) {
 	fs := flag.NewFlagSet("learn-types", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
 	fs.StringVar(&profileName, "profile", "", "profile name to use (defaults to the first profile in the config)")
-	fs.DurationVar(&timeout, "timeout", 30*time.Second, "max time to wait for a single message")
-	fs.DurationVar(&maxRuntime, "max-runtime", 0, "max total time to spend receiving messages (0 disables)")
-	fs.IntVar(&count, "count", 1000, "number of messages to inspect")
+	fs.DurationVar(&idleTimeout, "idle-timeout", 30*time.Second, "max time to wait for the next message; 0 waits indefinitely (implied by --duration)")
+	fs.DurationVar(&duration, "duration", 0, "total time to receive messages before stopping (0 disables)")
+	fs.IntVar(&count, "count", 1000, "number of messages to inspect; 0 means no limit (implied by --duration)")
 	fs.BoolVar(&save, "save", false, "merge results into <config>.types instead of only printing them")
 	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
 	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
@@ -427,6 +455,7 @@ func runLearnTypes(args []string) {
 	fs.Var(&protoPaths, "proto-path", "additional path to search for .proto files (may be repeated)")
 	fs.Parse(args)
 	trace.SetVerbose(verbose)
+	applyRunLimits(fs, duration, &count, &idleTimeout)
 
 	if len(topics) == 0 {
 		fatalf("--topic is required")
@@ -444,13 +473,13 @@ func runLearnTypes(args []string) {
 	}
 
 	opts := solace.ReceiveOptions{
-		Topics:     topics,
-		Timeout:    timeout,
-		MaxRuntime: maxRuntime,
-		Registry:   registry,
-		TopicTypes: profile.TopicTypes,
-		Mode:       "learn-types",
-		Count:      count,
+		Topics:      topics,
+		IdleTimeout: idleTimeout,
+		Duration:    duration,
+		Registry:    registry,
+		TopicTypes:  profile.TopicTypes,
+		Mode:        "learn-types",
+		Count:       count,
 	}
 	if save {
 		opts.SaveTypesPath = solace.TypesPath(resolvedConfigPath)
