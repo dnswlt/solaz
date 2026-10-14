@@ -3,6 +3,7 @@ package solace
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,8 +11,10 @@ import (
 	"maps"
 	"mime"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -90,31 +93,25 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 		deadline = time.Now().Add(opts.Duration)
 	}
 
+	// Ctrl-C / SIGTERM end the run like reaching --count or --duration:
+	// the loop stops and handler.finish() still runs (stats summary,
+	// learn-types --save). stop() restores default signal handling, so a
+	// second Ctrl-C kills the process if shutdown hangs.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var received, warnings int
-	// Count 0 means no message limit; IdleTimeout 0 means wait indefinitely
-	// for each message (the SDK's negative timeout), bounded only by the
-	// Duration deadline if one is set.
+	// Count 0 means no message limit.
 	for i := 0; opts.Count == 0 || i < opts.Count; i++ {
-		timeout := opts.IdleTimeout
-		if timeout == 0 {
-			timeout = -1
-		}
-		if !deadline.IsZero() {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				break
-			}
-			if timeout < 0 || remaining < timeout {
-				timeout = remaining
-			}
-		}
-		msg, err := receiver.ReceiveMessage(timeout)
+		msg, err := receiveNext(ctx, receiver, opts.IdleTimeout, deadline)
 		if err != nil {
-			var timeoutErr *solace.TimeoutError
-			if errors.As(err, &timeoutErr) && !deadline.IsZero() && !time.Now().Before(deadline) {
-				break
-			}
 			return fmt.Errorf("receive: %w", err)
+		}
+		if msg == nil {
+			if ctx.Err() != nil {
+				trace.Debugf("interrupted")
+			}
+			break
 		}
 		received++
 		if err := handler.handle(msg); err != nil {
@@ -123,9 +120,60 @@ func Run(svc solace.MessagingService, opts ReceiveOptions) error {
 			continue
 		}
 	}
+	stop()
 	trace.Debugf("done: received=%d warnings=%d", received, warnings)
 
 	return handler.finish()
+}
+
+// receivePollInterval bounds each blocking ReceiveMessage call so that
+// receiveNext notices cancellation promptly; the SDK call itself cannot be
+// interrupted. A waiting message is returned immediately, so this adds
+// no latency to message delivery.
+const receivePollInterval = 200 * time.Millisecond
+
+// messageReceiver is the subset of solace.DirectMessageReceiver used by
+// receiveNext, so it can be faked in tests.
+type messageReceiver interface {
+	ReceiveMessage(timeout time.Duration) (message.InboundMessage, error)
+}
+
+// receiveNext waits for the next message. It returns (nil, nil) when the
+// run should end normally: ctx is done or the deadline (zero: none) has
+// passed. It returns an error when no message arrives within idleTimeout
+// (0: wait indefinitely) or the receiver fails.
+func receiveNext(ctx context.Context, r messageReceiver, idleTimeout time.Duration, deadline time.Time) (message.InboundMessage, error) {
+	var idleDeadline time.Time
+	if idleTimeout > 0 {
+		idleDeadline = time.Now().Add(idleTimeout)
+	}
+	for {
+		if ctx.Err() != nil {
+			return nil, nil
+		}
+		now := time.Now()
+		wait := receivePollInterval
+		if !deadline.IsZero() {
+			if !now.Before(deadline) {
+				return nil, nil
+			}
+			wait = min(wait, deadline.Sub(now))
+		}
+		if !idleDeadline.IsZero() {
+			if !now.Before(idleDeadline) {
+				return nil, fmt.Errorf("no message within %s", idleTimeout)
+			}
+			wait = min(wait, idleDeadline.Sub(now))
+		}
+		msg, err := r.ReceiveMessage(wait)
+		if err == nil {
+			return msg, nil
+		}
+		var timeoutErr *solace.TimeoutError
+		if !errors.As(err, &timeoutErr) {
+			return nil, err
+		}
+	}
 }
 
 // messageHandler processes inbound messages one at a time and may emit a

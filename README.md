@@ -103,6 +103,10 @@ needs nothing else:
 solaz stats --topic 'trades/>' --duration 10m
 ```
 
+Ctrl-C (or SIGTERM) ends a run the same way: `stats` still prints its
+summary, `learn-types --save` still writes, and the exit status is 0. A
+second Ctrl-C exits immediately.
+
 ### Examples
 
 ```sh
