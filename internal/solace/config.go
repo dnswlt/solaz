@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -20,9 +21,28 @@ import (
 
 // Config is the top-level structure of the solaz config file
 // (default: ~/.solaz.conf, JSON-encoded). It holds a list of named
-// broker profiles.
+// broker profiles and the named proto sets they refer to.
 type Config struct {
-	Profiles []Profile `json:"profiles"`
+	ProtoSets map[string]ProtoSet `json:"proto_sets"`
+	Profiles  []Profile           `json:"profiles"`
+}
+
+// ProtoSet is a named schema: the .proto source roots to compile and the
+// topic→type mappings for the messages they define. Profiles refer to a
+// set by name via Profile.ProtoSet, so one schema can be shared by many
+// broker environments.
+type ProtoSet struct {
+	Paths []string `json:"paths"` // directories searched for .proto files
+
+	// TopicTypes maps a Solace topic subscription pattern (with `*` as
+	// a single-level wildcard or a prefix wildcard within a level — e.g.
+	// `d-*` — and `>` as a multi-level trailing wildcard) to a
+	// fully-qualified protobuf message type. At decode time the
+	// `print` command matches each message's concrete destination
+	// against these patterns; the most specific match wins. An entry
+	// here takes precedence over the message's application_message_type
+	// header, but is overridden by an explicit --proto-type flag.
+	TopicTypes map[string]string `json:"topic_types"`
 }
 
 // Authentication scheme identifiers used in Profile.AuthScheme.
@@ -41,27 +61,23 @@ type Profile struct {
 	// from which auth-specific fields are populated; an ambiguous
 	// combination (or no auth fields at all) requires this to be set
 	// explicitly.
-	AuthScheme         string   `json:"auth_scheme"`
-	ClientCertFile     string   `json:"client_cert_file"`     // PEM-encoded client cert
-	ClientKeyFile      string   `json:"client_key_file"`      // PEM-encoded private key
-	ClientKeyPass      string   `json:"client_key_pass"`      // optional password for encrypted key
-	ClientCertUserName string   `json:"client_cert_username"` // optional username for client-certificate auth
-	BasicUsername      string   `json:"basic_username"`       // username for basic auth
-	BasicPassword      string   `json:"basic_password"`       // password for basic auth (use ${VAR} + .vars)
-	TrustStoreDir      string   `json:"trust_store_dir"`      // dir with CA certs to trust
-	ClientName         string   `json:"client_name"`          // optional client name
-	InsecureSkipVerify bool     `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
-	ProtoPaths         []string `json:"proto_paths"`          // paths to search for .proto files
+	AuthScheme         string `json:"auth_scheme"`
+	ClientCertFile     string `json:"client_cert_file"`     // PEM-encoded client cert
+	ClientKeyFile      string `json:"client_key_file"`      // PEM-encoded private key
+	ClientKeyPass      string `json:"client_key_pass"`      // optional password for encrypted key
+	ClientCertUserName string `json:"client_cert_username"` // optional username for client-certificate auth
+	BasicUsername      string `json:"basic_username"`       // username for basic auth
+	BasicPassword      string `json:"basic_password"`       // password for basic auth (use ${VAR} + .vars)
+	TrustStoreDir      string `json:"trust_store_dir"`      // dir with CA certs to trust
+	ClientName         string `json:"client_name"`          // optional client name
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // dev-only: disable broker cert validation
+	ProtoSet           string `json:"proto_set"`            // optional name of an entry in Config.ProtoSets
 
-	// TopicTypes maps a Solace topic subscription pattern (with `*` as
-	// a single-level wildcard or a prefix wildcard within a level — e.g.
-	// `d-*` — and `>` as a multi-level trailing wildcard) to a
-	// fully-qualified protobuf message type. At decode time the
-	// `print` command matches each message's concrete destination
-	// against these patterns; the most specific match wins. An entry
-	// here takes precedence over the message's application_message_type
-	// header, but is overridden by an explicit --proto-type flag.
-	TopicTypes map[string]string `json:"topic_types"`
+	// ProtoPaths and TopicTypes are copied from the referenced proto set
+	// by SelectProfile. They are not read from JSON: a profile must go
+	// through proto_set.
+	ProtoPaths []string          `json:"-"`
+	TopicTypes map[string]string `json:"-"`
 }
 
 // LoadVarsFile reads a simple `key=value` file used as a default source of
@@ -190,12 +206,27 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Unknown keys are an error so that typos, and fields that have
+	// moved (e.g. proto_paths into proto_sets), fail loudly instead of
+	// being silently ignored.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
 	var c Config
-	if err := json.Unmarshal(data, &c); err != nil {
+	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	// Decode stops after the first value; reject trailing content the
+	// way json.Unmarshal would.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("parsing %s: unexpected data after top-level object", path)
 	}
 	if len(c.Profiles) == 0 {
 		return nil, fmt.Errorf("%s: no profiles defined", path)
+	}
+	for name, s := range c.ProtoSets {
+		if len(s.Paths) == 0 {
+			return nil, fmt.Errorf("%s: proto set %q has no paths", path, name)
+		}
 	}
 	seen := map[string]bool{}
 	for i, p := range c.Profiles {
@@ -206,22 +237,39 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("%s: duplicate profile name %q", path, p.Name)
 		}
 		seen[p.Name] = true
+		if _, ok := c.ProtoSets[p.ProtoSet]; p.ProtoSet != "" && !ok {
+			return nil, fmt.Errorf("%s: profile %q: unknown proto_set %q (available: %s)", path, p.Name, p.ProtoSet, protoSetNames(&c))
+		}
 	}
 	return &c, nil
 }
 
 // SelectProfile picks a profile by name, or falls back to the first
-// profile if no name is given.
+// profile if no name is given. The returned profile is a copy with
+// ProtoPaths and TopicTypes filled in from its proto set, so callers
+// may mutate it (e.g. via ExpandProfile) without affecting c.
 func SelectProfile(c *Config, name, configPath string) (*Profile, error) {
-	if name == "" {
-		return &c.Profiles[0], nil
-	}
-	for i := range c.Profiles {
-		if c.Profiles[i].Name == name {
-			return &c.Profiles[i], nil
+	idx := 0
+	if name != "" {
+		idx = slices.IndexFunc(c.Profiles, func(p Profile) bool { return p.Name == name })
+		if idx < 0 {
+			return nil, fmt.Errorf("profile %q not found in %s (available: %s)", name, configPath, ProfileNames(c))
 		}
 	}
-	return nil, fmt.Errorf("profile %q not found in %s (available: %s)", name, configPath, ProfileNames(c))
+	p := c.Profiles[idx]
+	if p.ProtoSet != "" {
+		s := c.ProtoSets[p.ProtoSet] // existence checked by LoadConfig
+		p.ProtoPaths = slices.Clone(s.Paths)
+		p.TopicTypes = maps.Clone(s.TopicTypes)
+	}
+	return &p, nil
+}
+
+func protoSetNames(c *Config) string {
+	if len(c.ProtoSets) == 0 {
+		return "none defined"
+	}
+	return strings.Join(slices.Sorted(maps.Keys(c.ProtoSets)), ", ")
 }
 
 func ValidateProfile(p *Profile, configPath string) error {

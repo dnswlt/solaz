@@ -334,3 +334,126 @@ func TestWriteTypesFile(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		config  string
+		wantErr string // "" means success; otherwise a substring of the error
+	}{
+		{
+			name: "profile referencing a proto set",
+			config: `{
+				"proto_sets": {"payments": {"paths": ["/p"]}},
+				"profiles": [{"name": "qa", "proto_set": "payments"}]
+			}`,
+		},
+		{
+			name:   "profile without proto set",
+			config: `{"profiles": [{"name": "qa"}]}`,
+		},
+		{
+			name: "unknown proto set",
+			config: `{
+				"proto_sets": {"payments": {"paths": ["/p"]}},
+				"profiles": [{"name": "qa", "proto_set": "billing"}]
+			}`,
+			wantErr: `unknown proto_set "billing" (available: payments)`,
+		},
+		{
+			name: "proto set without paths",
+			config: `{
+				"proto_sets": {"payments": {"topic_types": {"a/>": "A"}}},
+				"profiles": [{"name": "qa"}]
+			}`,
+			wantErr: `proto set "payments" has no paths`,
+		},
+		{
+			name:    "inline proto_paths is rejected",
+			config:  `{"profiles": [{"name": "qa", "proto_paths": ["/p"]}]}`,
+			wantErr: `unknown field "proto_paths"`,
+		},
+		{
+			name:    "unknown top-level key",
+			config:  `{"profiles": [{"name": "qa"}], "profles": []}`,
+			wantErr: `unknown field "profles"`,
+		},
+		{
+			name:    "trailing data",
+			config:  `{"profiles": [{"name": "qa"}]} }`,
+			wantErr: "unexpected data after top-level object",
+		},
+		{
+			name:    "no profiles",
+			config:  `{"proto_sets": {}}`,
+			wantErr: "no profiles defined",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "solaz.conf")
+			if err := os.WriteFile(path, []byte(tc.config), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadConfig(path)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("error = %q, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestSelectProfile_ResolvesProtoSet(t *testing.T) {
+	c := &Config{
+		ProtoSets: map[string]ProtoSet{
+			"payments": {Paths: []string{"/p"}, TopicTypes: map[string]string{"a/>": "A"}},
+		},
+		Profiles: []Profile{
+			{Name: "qa", ProtoSet: "payments"},
+			{Name: "bare"},
+		},
+	}
+
+	p, err := SelectProfile(c, "qa", "solaz.conf")
+	if err != nil {
+		t.Fatalf("SelectProfile: %v", err)
+	}
+	if want := []string{"/p"}; !reflect.DeepEqual(p.ProtoPaths, want) {
+		t.Errorf("ProtoPaths = %v, want %v", p.ProtoPaths, want)
+	}
+	if want := map[string]string{"a/>": "A"}; !reflect.DeepEqual(p.TopicTypes, want) {
+		t.Errorf("TopicTypes = %v, want %v", p.TopicTypes, want)
+	}
+
+	// The returned profile is a copy: mutating it must not leak into the
+	// shared proto set or the config's profile list.
+	p.ProtoPaths[0] = "/changed"
+	p.TopicTypes["b/>"] = "B"
+	p.Host = "changed"
+	if s := c.ProtoSets["payments"]; s.Paths[0] != "/p" || len(s.TopicTypes) != 1 {
+		t.Errorf("proto set mutated through profile: %+v", s)
+	}
+	if c.Profiles[0].Host != "" {
+		t.Errorf("config profile mutated through returned copy")
+	}
+
+	bare, err := SelectProfile(c, "bare", "solaz.conf")
+	if err != nil {
+		t.Fatalf("SelectProfile: %v", err)
+	}
+	if bare.ProtoPaths != nil || bare.TopicTypes != nil {
+		t.Errorf("profile without proto_set got ProtoPaths=%v TopicTypes=%v", bare.ProtoPaths, bare.TopicTypes)
+	}
+
+	if first, err := SelectProfile(c, "", "solaz.conf"); err != nil || first.Name != "qa" {
+		t.Errorf("SelectProfile(\"\") = %v, %v; want first profile", first, err)
+	}
+	if _, err := SelectProfile(c, "nope", "solaz.conf"); err == nil {
+		t.Errorf("SelectProfile(\"nope\"): expected error")
+	}
+}

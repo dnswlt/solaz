@@ -21,6 +21,7 @@ Commands:
   stats         Aggregate metrics across messages
   types         List protobuf message types known to the proto registry
   learn-types   Infer per-topic message types from live traffic and emit topic=type lines
+  profiles      List profile names from the config file
 `
 
 // version is overridden at build time via -ldflags="-X main.version=...".
@@ -105,8 +106,10 @@ func main() {
 		runTypes(args)
 	case "learn-types":
 		runLearnTypes(args)
+	case "profiles":
+		runProfiles(args)
 	default:
-		fatalf("unknown command %q (expected 'headers', 'print', 'stats', 'types', or 'learn-types')", cmd)
+		fatalf("unknown command %q (expected 'headers', 'print', 'stats', 'types', 'learn-types', or 'profiles')", cmd)
 	}
 }
 
@@ -115,7 +118,7 @@ func main() {
 // path with its extension swapped) are merged in as a baseline; CLI --var
 // flags override them. Topic→type mappings from the companion `.types`
 // file are folded into profile.TopicTypes as a fallback: an entry already
-// present in the .conf TopicTypes wins (so manual config always
+// present in the proto set's topic_types wins (so manual config always
 // overrides auto-learned values). When validate is true the connection
 // fields required to reach a broker are also checked. The resolved
 // configPath is returned alongside the profile so callers can derive
@@ -268,7 +271,7 @@ func runPrint(args []string) {
 	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
 
 	if infer && len(profile.ProtoPaths) == 0 {
-		fatalf("--infer requires proto_paths (in the profile) or --proto-path")
+		fatalf("--infer requires a proto_set (in the profile) or --proto-path")
 	}
 
 	var registry *solace.ProtoRegistry
@@ -354,7 +357,7 @@ func runTypes(args []string) {
 	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
 
 	if len(profile.ProtoPaths) == 0 {
-		fatalf("profile %q has no proto_paths configured and no --proto-path provided", profile.Name)
+		fatalf("profile %q has no proto_set and no --proto-path provided", profile.Name)
 	}
 	registry, err := solace.NewProtoRegistry(profile.ProtoPaths)
 	if err != nil {
@@ -365,9 +368,37 @@ func runTypes(args []string) {
 	}
 }
 
+// runProfiles prints the name of every profile in the config file, one
+// per line, in file order (so the first line is the default profile).
+// Templates are not expanded: listing must not depend on --var values.
+func runProfiles(args []string) {
+	var (
+		configPath string
+		verbose    bool
+	)
+	fs := flag.NewFlagSet("profiles", flag.ExitOnError)
+	fs.StringVar(&configPath, "config", "", "path to config file (default: ~/.solaz.conf)")
+	fs.BoolVar(&verbose, "verbose", false, "enable debug logging to stderr")
+	fs.BoolVar(&verbose, "v", false, "shorthand for --verbose")
+	fs.Parse(args)
+	trace.SetVerbose(verbose)
+
+	if configPath == "" {
+		configPath = solace.DefaultConfigPath()
+	}
+	cfg, err := solace.LoadConfig(configPath)
+	if err != nil {
+		fatalf("config: %v", err)
+	}
+	trace.Debugf("loaded %d profiles from %s", len(cfg.Profiles), configPath)
+	for _, p := range cfg.Profiles {
+		fmt.Println(p.Name)
+	}
+}
+
 // runLearnTypes subscribes to the supplied topics and tries to determine
 // the protobuf message type carried on each. Topics already covered by
-// the profile's topic_types (from .conf or the companion .types file) are
+// the proto set's topic_types (from .conf or the companion .types file) are
 // skipped, as are individual messages that carry an
 // application_message_type header or a JSON content type. Resolved
 // mappings are emitted to stdout as `topic=type` lines; ambiguous or
@@ -404,7 +435,7 @@ func runLearnTypes(args []string) {
 	profile.ProtoPaths = append(profile.ProtoPaths, protoPaths...)
 
 	if len(profile.ProtoPaths) == 0 {
-		fatalf("learn-types requires proto_paths (in the profile) or --proto-path")
+		fatalf("learn-types requires a proto_set (in the profile) or --proto-path")
 	}
 
 	registry, err := solace.NewProtoRegistry(profile.ProtoPaths)

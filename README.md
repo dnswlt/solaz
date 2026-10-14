@@ -42,7 +42,8 @@ solaz <command> [flags]
     `application/vnd.google.protobuf`, `application/protobuf`), or any
     proto hint (matching `topic_types` entry, or an
     `application_message_type` header) → decode as protobuf using the
-    descriptors from `proto_paths` and print as single-line JSON.
+    descriptors from the profile's proto set and print as single-line
+    JSON.
   - Anything else → write the raw payload bytes to stdout unchanged. No
     framing, no trailing newline — pipe into a downstream decoder of your
     choice. Use `--count 1` (the default) when consuming raw output, or
@@ -50,8 +51,10 @@ solaz <command> [flags]
 - `stats`   — aggregate per-topic count, total bytes, and average size across
   messages.
 - `types`   — list all protobuf message types known to the proto registry
-  (compiled from `proto_paths`). Does not connect to a broker; useful for
-  discovering the right value to pass to `--proto-type`.
+  (compiled from the profile's proto set). Does not connect to a broker;
+  useful for discovering the right value to pass to `--proto-type`.
+- `profiles` — list profile names from the config file, one per line, in
+  file order (the first is the default). Does not connect to a broker.
 - `learn-types` — for each subscribed topic, narrow down the protobuf
   message type carried on it by intersecting the candidate sets from
   successive messages, and print one `topic=type` line per resolved
@@ -138,7 +141,7 @@ solaz learn-types --topic 'trades/>' --save --max-runtime 5m
 ```
 
 The `.types` file is auto-consulted by every command. Its format mirrors
-`.vars` (one `topic=type` per line). `topic_types` in `.conf` wins on
+`.vars` (one `topic=type` per line). A proto set's `topic_types` wins on
 key collision, so a manually-curated mapping always overrides a learned
 one. To re-learn a topic, delete its line from `.types`.
 
@@ -194,13 +197,23 @@ solaz print --envelope --topic 'foo/>' --count 50 \
 ## Config
 
 `solaz` reads a JSON config file (default: `~/.solaz.conf`, override with
-`--config PATH`). The file holds a list of named broker profiles; pick one
-with `--profile NAME`, or omit the flag to use the first entry.
+`--config PATH`). The file holds a list of named broker profiles and a map
+of named proto sets. Pick a profile with `--profile NAME`, or omit the flag
+to use the first entry. Unknown keys are rejected.
 
 Example `~/.solaz.conf`:
 
 ```json
 {
+  "proto_sets": {
+    "trading": {
+      "paths": ["/home/me/src/trading-api/proto"],
+      "topic_types": {
+        "trades/orders/>": "com.example.Order",
+        "trades/fills/>":  "com.example.Fill"
+      }
+    }
+  },
   "profiles": [
     {
       "name": "dev",
@@ -209,7 +222,8 @@ Example `~/.solaz.conf`:
       "client_cert_file": "/etc/solaz/dev.crt",
       "client_key_file":  "/etc/solaz/dev.key",
       "trust_store_dir":  "/etc/solaz/ca/",
-      "client_name":      "solaz-dev"
+      "client_name":      "solaz-dev",
+      "proto_set":        "trading"
     },
     {
       "name": "prod",
@@ -220,16 +234,19 @@ Example `~/.solaz.conf`:
       "client_key_pass":      "hunter2",
       "client_cert_username": "svc-solaz-prod",
       "trust_store_dir":      "/etc/solaz/ca/",
-      "proto_paths":          ["/etc/solaz/protos"]
+      "proto_set":            "trading"
     }
   ]
 }
 ```
 
-Required fields: `name`, `host`, `vpn`, plus the credentials for the
-chosen `auth_scheme` (see below).
+One profile per broker environment, all sharing one proto set, keeps
+switching environments down to `--profile NAME`.
 
-Optional fields:
+Required profile fields: `name`, `host`, `vpn`, plus the credentials for
+the chosen `auth_scheme` (see below).
+
+Optional profile fields:
 
 - `auth_scheme` — `client_cert` (default, client-certificate auth) or
   `basic` (username/password). When omitted, the scheme is derived from
@@ -252,9 +269,16 @@ Optional fields:
   connected-clients list. Cosmetic; not used for authentication.
 - `insecure_skip_verify` — dev-only. Disables broker certificate
   validation (chain *and* hostname).
-- `proto_paths` — list of directories searched for `.proto` files used by
-  the `print` command to decode protobuf payloads to JSON. Required for
-  `print` if message payloads are protobuf-encoded.
+- `proto_set` — name of an entry in `proto_sets`. Required for decoding
+  protobuf payloads (or pass `--proto-path`).
+
+### Proto sets
+
+`proto_sets` maps a name to a schema that profiles share. Fields:
+
+- `paths` (required) — directories searched for `.proto` files used to
+  decode protobuf payloads to JSON. `--proto-path` adds more for a
+  single run.
 - `topic_types` — map from a Solace topic subscription pattern (with
   `*` matching one level, `*` as a suffix to a level part acting as a
   prefix wildcard within that level — e.g. `d-*` matches `d-anything` —
@@ -263,20 +287,12 @@ Optional fields:
   the `print` command matches each message's concrete destination
   against these patterns to pick a type; the most specific match wins
   (more literal segments first, then more segments overall), and an
-  unresolvable tie produces a per-message error. This lets a single run
-  subscribe to several topics that carry different types:
+  unresolvable tie produces a per-message error. With the example
+  above, a single run can subscribe to several topics that carry
+  different types:
 
   ```sh
   solaz print --topic 'trades/orders/>' --topic 'trades/fills/>'
-  ```
-
-  with the profile:
-
-  ```json
-  "topic_types": {
-    "trades/orders/>": "com.example.Order",
-    "trades/fills/>":  "com.example.Fill"
-  }
   ```
 
   A `topic_types` match takes precedence over the message's

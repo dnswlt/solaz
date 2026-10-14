@@ -367,11 +367,11 @@ func sniffJSON(payload []byte) json.RawMessage {
 // (the envelope writer in particular) can record which type was used.
 func (h *payloadHandler) decodeProto(msg message.InboundMessage, payload []byte, msgType string) (json.RawMessage, string, error) {
 	if h.registry == nil {
-		return nil, "", fmt.Errorf("no proto registry configured (set proto_paths in profile)")
+		return nil, "", fmt.Errorf("no proto registry configured (set proto_set in the profile or use --proto-path)")
 	}
 	if msgType == "" {
 		if !h.inferType {
-			return nil, "", fmt.Errorf("message type is unknown for topic %q (use --proto-type, --infer, or configure topic_types in the profile)", msg.GetDestinationName())
+			return nil, "", fmt.Errorf("message type is unknown for topic %q (use --proto-type, --infer, or configure topic_types in the proto set)", msg.GetDestinationName())
 		}
 		started := time.Now()
 		candidates, err := h.registry.InferMessageType(payload)

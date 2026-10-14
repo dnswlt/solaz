@@ -20,9 +20,10 @@ about *how* the code should be shaped, not *what* it does.
 - [internal/solace/solace.go](internal/solace/solace.go) — receive loop,
   per-mode `messageHandler` implementations (`headers`, `print`, `stats`).
 - [internal/solace/config.go](internal/solace/config.go) — config/profile
-  loading, `${var}` expansion, `.vars` companion file, broker service build.
+  and proto_set resolution, `${var}` expansion, `.vars` companion file,
+  broker service build.
 - [internal/solace/registry.go](internal/solace/registry.go) — protobuf
-  descriptor compilation from `proto_paths`.
+  descriptor compilation from a proto set's `paths`.
 - [internal/solace/topic_match.go](internal/solace/topic_match.go) — Solace
   topic pattern matching (`*` single-level / prefix-within-level, `>` trailing
   multi-level), and the `topic_types` specificity index.
@@ -57,9 +58,9 @@ Subcommands fall into two categories:
 - **Pipeable** (machine-readable, one record per message, no decoration):
   `print` emits single-line JSON for JSON (by content type or sniffed)
   and protobuf payloads, and raw payload bytes for everything else;
-  `types` emits one FQ name per line. These must stay `jq`/`grep`/`awk`-friendly (or
-  whatever decoder fits the payload). No headers, no summary lines, no
-  progress chatter on stdout. Ever.
+  `types` and `profiles` emit one name per line. These must stay
+  `jq`/`grep`/`awk`-friendly (or whatever decoder fits the payload). No
+  headers, no summary lines, no progress chatter on stdout. Ever.
 - **Human-readable** (tabular, decorated): `headers`, `stats`. These use
   `text/tabwriter` and are fine to format for human eyes. Don't pipe them.
 
@@ -136,8 +137,8 @@ principle 2). Raw `fmt.Fprintf(os.Stderr, ...)` should not appear outside
   (`*` as prefix-within-level, `>` only at the end) are subtle and covered
   by [internal/solace/topic_match_test.go](internal/solace/topic_match_test.go).
 - **Proto registry**: lazy — only build it when a command actually needs it
-  (`print`, `types`). `headers` and `stats` must work without
-  `proto_paths` configured.
+  (`print`, `types`, `learn-types`). `headers` and `stats` must work
+  without a `proto_set` configured.
 - **No new dependencies** without a good reason. The current set (Solace
   SDK, `protobuf`, `protocompile`, `genproto/googleapis/type/*`) is
   deliberate; everything else is stdlib.
