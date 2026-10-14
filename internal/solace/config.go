@@ -385,6 +385,9 @@ func BuildService(p *Profile) (solacemsg.MessagingService, error) {
 	props := config.ServicePropertyMap{
 		config.TransportLayerPropertyHost: p.Host,
 		config.ServicePropertyVPNName:     p.VPN,
+		// Off by default in the SDK; without it msg.GetTimeStamp() is
+		// never set and ReceiveTimestamp is missing from headers output.
+		config.ServicePropertyGenerateReceiveTimestamps: true,
 	}
 	switch scheme {
 	case AuthSchemeClientCert:

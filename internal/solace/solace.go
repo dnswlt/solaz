@@ -237,16 +237,16 @@ func (h *headersHandler) handle(msg message.InboundMessage) error {
 		fmt.Fprintf(w, "SenderID:\t%s\n", v)
 	}
 	if v, ok := msg.GetSenderTimestamp(); ok {
-		fmt.Fprintf(w, "SenderTimestamp:\t%s\n", v.Format(time.RFC3339Nano))
+		fmt.Fprintf(w, "SenderTimestamp:\t%s\n", v.UTC().Format(time.RFC3339Nano))
 	}
 	if v, ok := msg.GetTimeStamp(); ok {
-		fmt.Fprintf(w, "ReceiveTimestamp:\t%s\n", v.Format(time.RFC3339Nano))
+		fmt.Fprintf(w, "ReceiveTimestamp:\t%s\n", v.UTC().Format(time.RFC3339Nano))
 	}
 	if v, ok := msg.GetSequenceNumber(); ok {
 		fmt.Fprintf(w, "SequenceNumber:\t%d\n", v)
 	}
 	if exp := msg.GetExpiration(); !exp.IsZero() && exp.Unix() != 0 {
-		fmt.Fprintf(w, "Expiration:\t%s\n", exp.Format(time.RFC3339Nano))
+		fmt.Fprintf(w, "Expiration:\t%s\n", exp.UTC().Format(time.RFC3339Nano))
 	}
 	if v, ok := msg.GetPriority(); ok {
 		fmt.Fprintf(w, "Priority:\t%d\n", v)
@@ -521,16 +521,16 @@ func collectPayloadHeaders(msg message.InboundMessage, payload []byte) map[strin
 		h["SenderID"] = v
 	}
 	if v, ok := msg.GetSenderTimestamp(); ok {
-		h["SenderTimestamp"] = v.Format(time.RFC3339Nano)
+		h["SenderTimestamp"] = v.UTC().Format(time.RFC3339Nano)
 	}
 	if v, ok := msg.GetTimeStamp(); ok {
-		h["ReceiveTimestamp"] = v.Format(time.RFC3339Nano)
+		h["ReceiveTimestamp"] = v.UTC().Format(time.RFC3339Nano)
 	}
 	if v, ok := msg.GetSequenceNumber(); ok {
 		h["SequenceNumber"] = v
 	}
 	if exp := msg.GetExpiration(); !exp.IsZero() && exp.Unix() != 0 {
-		h["Expiration"] = exp.Format(time.RFC3339Nano)
+		h["Expiration"] = exp.UTC().Format(time.RFC3339Nano)
 	}
 	if v, ok := msg.GetPriority(); ok {
 		h["Priority"] = v
