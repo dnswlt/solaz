@@ -63,7 +63,7 @@ message IntervalMessage {
 	}
 
 	// Instantiate the registry
-	reg, err := NewProtoRegistry([]string{tmpDir}, false)
+	reg, err := NewProtoRegistry([]string{tmpDir})
 	if err != nil {
 		t.Fatalf("NewProtoRegistry failed: %v", err)
 	}
@@ -157,7 +157,7 @@ func newScoreTestRegistry(t *testing.T) *ProtoRegistry {
 	if err := os.WriteFile(filepath.Join(tmpDir, "score.proto"), []byte(scoreTestProtos), 0644); err != nil {
 		t.Fatalf("write proto: %v", err)
 	}
-	reg, err := NewProtoRegistry([]string{tmpDir}, false)
+	reg, err := NewProtoRegistry([]string{tmpDir})
 	if err != nil {
 		t.Fatalf("NewProtoRegistry: %v", err)
 	}
@@ -418,7 +418,7 @@ message M { string s = 1; }
 	}
 
 	missing := filepath.Join(tmpDir, "does-not-exist")
-	reg, err := NewProtoRegistry([]string{missing, tmpDir}, false)
+	reg, err := NewProtoRegistry([]string{missing, tmpDir})
 	if err != nil {
 		t.Fatalf("NewProtoRegistry should tolerate missing paths, got: %v", err)
 	}
@@ -427,74 +427,11 @@ message M { string s = 1; }
 	}
 
 	// All missing → empty registry, no error.
-	emptyReg, err := NewProtoRegistry([]string{missing}, false)
+	emptyReg, err := NewProtoRegistry([]string{missing})
 	if err != nil {
 		t.Fatalf("all-missing paths should not error, got: %v", err)
 	}
 	if len(emptyReg.MessageNames()) != 0 {
 		t.Errorf("expected empty registry, got %v", emptyReg.MessageNames())
-	}
-}
-
-// TestNewProtoRegistry_Isolated verifies that with isolated=true a
-// consumer root cannot import a file that lives only in a sibling root,
-// while the merged mode still resolves the same setup. Both modes must
-// register every reachable message into a single combined registry.
-func TestNewProtoRegistry_Isolated(t *testing.T) {
-	// Root A: consumer that imports "common/types.proto".
-	rootA := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(rootA, "consumer"), 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	consumer := `syntax = "proto3";
-package test.iso.consumer;
-import "common/types.proto";
-message Order {
-  test.iso.common.Shared shared = 1;
-}
-`
-	if err := os.WriteFile(filepath.Join(rootA, "consumer", "order.proto"), []byte(consumer), 0644); err != nil {
-		t.Fatalf("write order.proto: %v", err)
-	}
-
-	// Root B: shared types referenced by root A.
-	rootB := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(rootB, "common"), 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	common := `syntax = "proto3";
-package test.iso.common;
-message Shared {
-  string id = 1;
-}
-`
-	if err := os.WriteFile(filepath.Join(rootB, "common", "types.proto"), []byte(common), 0644); err != nil {
-		t.Fatalf("write types.proto: %v", err)
-	}
-
-	// Merged: the import resolves because rootB is on the import path.
-	merged, err := NewProtoRegistry([]string{rootA, rootB}, false)
-	if err != nil {
-		t.Fatalf("merged mode: %v", err)
-	}
-	if _, err := merged.FindMessage("test.iso.consumer.Order"); err != nil {
-		t.Errorf("merged mode: Order not found: %v", err)
-	}
-	if _, err := merged.FindMessage("test.iso.common.Shared"); err != nil {
-		t.Errorf("merged mode: Shared not found: %v", err)
-	}
-
-	// Isolated: rootA cannot see "common/types.proto" — compile fails.
-	if _, err := NewProtoRegistry([]string{rootA, rootB}, true); err == nil {
-		t.Error("isolated mode: expected compile error for unresolved cross-root import, got nil")
-	}
-
-	// Isolated, rootB only: it has no external deps and must succeed.
-	regB, err := NewProtoRegistry([]string{rootB}, true)
-	if err != nil {
-		t.Fatalf("isolated mode (rootB only): %v", err)
-	}
-	if _, err := regB.FindMessage("test.iso.common.Shared"); err != nil {
-		t.Errorf("isolated mode (rootB only): Shared not found: %v", err)
 	}
 }

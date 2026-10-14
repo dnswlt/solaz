@@ -255,11 +255,6 @@ Optional fields:
 - `proto_paths` — list of directories searched for `.proto` files used by
   the `print` command to decode protobuf payloads to JSON. Required for
   `print` if message payloads are protobuf-encoded.
-- `proto_paths_isolated` — compile each `proto_paths` entry independently
-  instead of treating them as one shared import root. Use when the
-  entries are unrelated source trees (e.g. checkouts of separate repos)
-  that should not see each other's files when resolving `import`
-  statements. Default `false`.
 - `topic_types` — map from a Solace topic subscription pattern (with
   `*` matching one level, `*` as a suffix to a level part acting as a
   prefix wildcard within that level — e.g. `d-*` matches `d-anything` —

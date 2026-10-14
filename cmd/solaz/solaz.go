@@ -274,7 +274,7 @@ func runPrint(args []string) {
 	var registry *solace.ProtoRegistry
 	if !raw && len(profile.ProtoPaths) > 0 {
 		var err error
-		registry, err = solace.NewProtoRegistry(profile.ProtoPaths, profile.ProtoPathsIsolated)
+		registry, err = solace.NewProtoRegistry(profile.ProtoPaths)
 		if err != nil {
 			fatalf("proto registry: %v", err)
 		}
@@ -356,7 +356,7 @@ func runTypes(args []string) {
 	if len(profile.ProtoPaths) == 0 {
 		fatalf("profile %q has no proto_paths configured and no --proto-path provided", profile.Name)
 	}
-	registry, err := solace.NewProtoRegistry(profile.ProtoPaths, profile.ProtoPathsIsolated)
+	registry, err := solace.NewProtoRegistry(profile.ProtoPaths)
 	if err != nil {
 		fatalf("proto registry: %v", err)
 	}
@@ -407,7 +407,7 @@ func runLearnTypes(args []string) {
 		fatalf("learn-types requires proto_paths (in the profile) or --proto-path")
 	}
 
-	registry, err := solace.NewProtoRegistry(profile.ProtoPaths, profile.ProtoPathsIsolated)
+	registry, err := solace.NewProtoRegistry(profile.ProtoPaths)
 	if err != nil {
 		fatalf("proto registry: %v", err)
 	}
